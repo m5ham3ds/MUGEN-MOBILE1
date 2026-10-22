@@ -224,6 +224,7 @@ object GeminiRosterBalancer {
                     proposedGroundFront = propGF,
                     originalGroundBack = origGB,
                     proposedGroundBack = propGB,
+                    declaredLocalcoord = baseScale?.declaredLocalcoord ?: input.localcoord,
                     proposedLocalcoord = baseScale?.proposedLocalcoord ?: input.localcoord,
                     archetype = baseScale?.archetype ?: ScaleArchetype.STANDARD,
                     anomalies = baseScale?.anomalies ?: emptyList(),
@@ -271,7 +272,9 @@ object GeminiRosterBalancer {
             proposals = newProposals,
             balancedCharactersCount = balancedCount,
             charactersNeedingAdjustmentCount = needingAdjustmentCount,
-            scaleProposals = allScaleProposals
+            scaleProposals = allScaleProposals,
+            combatAdjustmentsCount = newProposals.count { it.statProposals.isNotEmpty() },
+            physicalCalibrationCount = newProposals.count { it.scaleProposal?.hasScaleAdjustment == true }
         )
     }
 

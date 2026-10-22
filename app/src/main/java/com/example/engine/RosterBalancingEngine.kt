@@ -142,9 +142,6 @@ data class StatMetrics(
     val iqr: Double
 )
 
-/**
- * Comprehensive summary of roster balancing analysis.
- */
 data class RosterBalancingSummary(
     val totalCharactersScanned: Int,
     val analyzedCharactersCount: Int,
@@ -156,7 +153,9 @@ data class RosterBalancingSummary(
     val defenceMetrics: StatMetrics?,
     val proposals: List<CharacterBalanceProposal>,
     val unanalyzableCharacters: List<UnanalyzableCharacterInfo>,
-    val scaleProposals: List<CharacterScaleProposal> = emptyList()
+    val scaleProposals: List<CharacterScaleProposal> = emptyList(),
+    val combatAdjustmentsCount: Int = proposals.count { it.statProposals.isNotEmpty() },
+    val physicalCalibrationCount: Int = proposals.count { it.scaleProposal?.hasScaleAdjustment == true }
 )
 
 /**
@@ -423,7 +422,6 @@ object RosterBalancingEngine {
         propAttack?.let { statProposals.add(it) }
         propDefence?.let { statProposals.add(it) }
 
-        val hasAdjustments = statProposals.isNotEmpty()
 
         // Determine overall severity
         val severities = mutableListOf<StatSeverity>()
@@ -437,40 +435,51 @@ object RosterBalancingEngine {
             else -> StatSeverity.NORMAL
         }
 
-        val overallExplanation = if (!hasAdjustments) {
-            "المقاتل متوازن وضمن النطاقات القتالية المقبولة؛ لا يتطلب أي تعديل."
-        } else {
-            val parts = statProposals.map { "${it.statType.arabicName}: ${it.explanation}" }
-            parts.joinToString("\n")
+        // Physical scale analysis: always analyze every fighter with safe 1.0 default if omitted in CNS
+        val effXScale = input.xScale ?: 1.0
+        val effYScale = input.yScale ?: 1.0
+        val visual = VisualScaleMetrics(
+            xScale = effXScale,
+            yScale = effYScale,
+            aspectRatio = if (effYScale > 0.0) effXScale / effYScale else 1.0,
+            declaredLocalcoord = input.localcoord
+        )
+        val dim = PhysicalDimensions(
+            height = input.height,
+            groundFront = input.groundFront,
+            groundBack = input.groundBack
+        )
+        val arch = CharacterScaleAnalyzer.classifyArchetype(input.characterId, input.displayName, visual, dim)
+        val anomalies = CharacterScaleAnalyzer.detectAnomalies(visual, dim, ScaleMovementMetrics(), arch)
+        val scaleProfile = CharacterScaleProfile(
+            characterId = input.characterId,
+            displayName = input.displayName,
+            visualScale = visual,
+            physicalDimensions = dim,
+            movementMetrics = ScaleMovementMetrics(),
+            archetype = arch,
+            detectedAnomalies = anomalies
+        )
+        val scaleProposal = CharacterScaleAnalyzer.generateScaleProposal(scaleProfile)
+
+        val hasCombatAdjustments = statProposals.isNotEmpty()
+        val hasPhysicalAdjustments = scaleProposal.hasScaleAdjustment
+        val hasAdjustments = hasCombatAdjustments || hasPhysicalAdjustments
+
+        val overallExplanation = when {
+            !hasAdjustments -> "المقاتل متوازن وضمن النطاقات القتالية والمقاييس الفيزيائية المقبولة؛ لا يتطلب أي تعديل."
+            hasCombatAdjustments && hasPhysicalAdjustments -> {
+                val statParts = statProposals.map { "${it.statType.arabicName}: ${it.explanation}" }
+                (statParts + listOf("المعايرة الفيزيائية: ${scaleProposal.arabicRationale}")).joinToString("\n")
+            }
+            hasCombatAdjustments -> {
+                statProposals.map { "${it.statType.arabicName}: ${it.explanation}" }.joinToString("\n")
+            }
+            hasPhysicalAdjustments -> {
+                "المعايرة الفيزيائية: ${scaleProposal.arabicRationale}"
+            }
+            else -> "المقاتل متوازن."
         }
-
-        // Physical scale analysis when scale data is provided
-        val scaleProfile = if (input.xScale != null || input.yScale != null) {
-            val visual = VisualScaleMetrics(
-                xScale = input.xScale ?: 1.0,
-                yScale = input.yScale ?: 1.0,
-                aspectRatio = if ((input.yScale ?: 1.0) > 0.0) (input.xScale ?: 1.0) / (input.yScale ?: 1.0) else 1.0,
-                declaredLocalcoord = input.localcoord
-            )
-            val dim = PhysicalDimensions(
-                height = input.height,
-                groundFront = input.groundFront,
-                groundBack = input.groundBack
-            )
-            val arch = CharacterScaleAnalyzer.classifyArchetype(input.characterId, input.displayName, visual, dim)
-            val anomalies = CharacterScaleAnalyzer.detectAnomalies(visual, dim, ScaleMovementMetrics(), arch)
-            CharacterScaleProfile(
-                characterId = input.characterId,
-                displayName = input.displayName,
-                visualScale = visual,
-                physicalDimensions = dim,
-                movementMetrics = ScaleMovementMetrics(),
-                archetype = arch,
-                detectedAnomalies = anomalies
-            )
-        } else null
-
-        val scaleProposal = scaleProfile?.let { CharacterScaleAnalyzer.generateScaleProposal(it) }
 
         return CharacterBalanceProposal(
             characterId = input.characterId,
@@ -482,7 +491,7 @@ object RosterBalancingEngine {
             originalDefence = input.defence,
             proposedDefence = propDefence?.proposedValue ?: input.defence,
             statProposals = statProposals,
-            hasAdjustments = hasAdjustments || (scaleProposal?.hasScaleAdjustment == true),
+            hasAdjustments = hasAdjustments,
             overallSeverity = overallSeverity,
             overallExplanation = overallExplanation,
             scaleProposal = scaleProposal
@@ -621,8 +630,8 @@ object RosterBalancingEngine {
                             attack = attack,
                             defence = defence,
                             rawError = null,
-                            xScale = rawXScale,
-                            yScale = rawYScale,
+                            xScale = rawXScale ?: 1.0,
+                            yScale = rawYScale ?: 1.0,
                             height = rawHeight,
                             groundFront = rawGFront,
                             groundBack = rawGBack,

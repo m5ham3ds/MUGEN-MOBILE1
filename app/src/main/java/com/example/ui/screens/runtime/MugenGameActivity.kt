@@ -128,6 +128,13 @@ class MugenGameActivity : SDLActivity() {
         val baseDir = com.example.storage.MugenMobileStorage.getBaseDir(this)
         InputManager.ensureDefaultConfigIni(baseDir)
 
+        // 2.55 Enforce safe face portrait clipping in data/fight.def to prevent HUD portrait blowout
+        try {
+            com.example.engine.FightDefManager.ensureSafePortraitClipping(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "Non-fatal portrait clipping notice in MugenGameActivity: ${e.message}")
+        }
+
         // 2.6 Synchronize characters in data/select.def before engine boots
         try {
             com.example.engine.MugenParser.getCharacters(this)

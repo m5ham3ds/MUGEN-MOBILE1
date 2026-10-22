@@ -28,11 +28,16 @@ enum class ScaleAnomalyType(val arabicDescription: String) {
     UNDERSIZED_SPRITE("حجم مرئي ضئيل للغاية يعيق دقة الاشتباك وتحديد الضربات"),
     PUSHBOX_SCALE_MISMATCH("عدم تطابق بين مساحة الدفع/الارتفاع الفيزيائي ومقياس الرسم المرئي"),
     MISSING_OR_MISMATCHED_LOCALCOORD("دقة العرض المحلية (localcoord) غير محددة أو غير متوافقة مع أبعاد الرسوم"),
-    SPEED_SCALE_IMBALANCE("سرعة الحركة الفيزيائية غير متناسقة مع مقياس وحجم الجسم")
+    SPEED_SCALE_IMBALANCE("سرعة الحركة الفيزيائية غير متناسقة مع مقياس وحجم الجسم"),
+    ROSTER_SCALE_DEVIATION("انحراف في المقياس عن المعيار التنافسي المتوازن (1.0x)"),
+    OVERSIZED_PORTRAIT("صورة المقاتل في واجهة القتال (Portrait) غير مقيدة وتتطلب ضبط نافذة العرض")
 }
 
 /**
  * Physical collision pushbox and reference dimensions.
+ *
+ * NOTE: In MUGEN / IKEMEN-GO, `height` is the internal collision/throw height declared in [size] height,
+ * NOT the visual sprite pixel height of the character.
  */
 data class PhysicalDimensions(
     val height: Int? = null,
@@ -46,7 +51,10 @@ data class PhysicalDimensions(
     val midPosY: Int? = null,
     val standSizebox: String? = null,
     val airSizebox: String? = null
-)
+) {
+    val heightLabel: String
+        get() = if (height != null) "$height (ارتفاع التصادم الداخلي [size.height])" else "غير محدد (افتراضي)"
+}
 
 /**
  * Key movement and velocity physics related to body scale.
@@ -61,7 +69,7 @@ data class ScaleMovementMetrics(
 )
 
 /**
- * Visual scale factors and declared screen coordinates.
+ * Visual scale factors, portrait scale, and declared screen coordinates.
  */
 data class VisualScaleMetrics(
     val xScale: Double = 1.0,
@@ -69,7 +77,8 @@ data class VisualScaleMetrics(
     val aspectRatio: Double = 1.0,
     val declaredLocalcoord: String? = null,
     val localcoordWidth: Int? = null,
-    val localcoordHeight: Int? = null
+    val localcoordHeight: Int? = null,
+    val declaredPortraitScale: Double? = null
 )
 
 /**
@@ -105,12 +114,16 @@ data class CharacterScaleProposal(
     val proposedGroundFront: Int?,
     val originalGroundBack: Int?,
     val proposedGroundBack: Int?,
+    val declaredLocalcoord: String?,
     val proposedLocalcoord: String?,
+    val declaredPortraitScale: Double? = null,
+    val proposedPortraitScale: Double? = null,
     val archetype: ScaleArchetype,
     val anomalies: List<ScaleAnomalyType>,
     val hasScaleAdjustment: Boolean,
     val arabicRationale: String,
-    val isAiGenerated: Boolean = false
+    val isAiGenerated: Boolean = false,
+    val collisionHeightNote: String = "ارتفاع التصادم الداخلي [size.height] ولا يمثل الارتفاع المرئي للمجسم"
 )
 
 /**
@@ -125,18 +138,21 @@ data class ScaleBalancingConfig(
     val bossScaleCap: Double = 1.65,
     val standardHeightMin: Int = 50,
     val standardHeightMax: Int = 110,
-    val dampingDivisor: Double = 2.2
+    val dampingDivisor: Double = 2.2,
+    val autoHarmonizeRosterTarget: Double = 1.0
 )
 
 /**
  * Pure, standalone engine for analyzing fighter physical scale, visual proportions,
- * pushbox boundaries, and coordinate compatibility in MUGEN/IKEMEN-GO.
+ * pushbox boundaries, coordinate compatibility, and portrait scaling in MUGEN/IKEMEN-GO.
  *
  * Guarantees:
  * 1. Zero disk writes during analysis (strictly in-memory).
  * 2. Deterministic: identical inputs produce identical profiles and proposals.
  * 3. Proportional integrity: maintains horizontal/vertical aspect parity (xscale == yscale).
  * 4. Archetype preservation: does NOT force uniform height on all fighters; preserves boss presence.
+ * 5. Strict separation between body scale (xscale/yscale in .cns) and portrait scaling (fight.def / portraitscale in .def).
+ * 6. Never conflates internal collision height ([size] height) with visual sprite dimensions.
  */
 object CharacterScaleAnalyzer {
 
@@ -160,17 +176,18 @@ object CharacterScaleAnalyzer {
         characterId: String,
         displayName: String
     ): CharacterScaleProfile {
-        // 1. Visual scale
+        // 1. Visual scale - default safely to 1.0 if not specified in .cns
         val rawXScale = cnsEditor.getProperty("[size]", "xscale")
         val rawYScale = cnsEditor.getProperty("[size]", "yscale")
         val xScale = rawXScale?.toDoubleOrNull() ?: 1.0
         val yScale = rawYScale?.toDoubleOrNull() ?: 1.0
         val aspect = if (yScale > 0.0) xScale / yScale else 1.0
 
-        // Localcoord from .def if available
+        // Localcoord & Portraitscale from .def if available
         var declaredLocalcoord: String? = null
         var localWidth: Int? = null
         var localHeight: Int? = null
+        var declaredPortraitScale: Double? = null
 
         if (defEditor != null) {
             val lc = defEditor.getProperty("info", "localcoord")
@@ -185,6 +202,10 @@ object CharacterScaleAnalyzer {
                     localHeight = parts[1].toIntOrNull()
                 }
             }
+
+            val ps = defEditor.getProperty("info", "portraitscale")
+                ?: defEditor.getProperty("", "portraitscale")
+            declaredPortraitScale = ps?.trim()?.toDoubleOrNull()
         }
 
         val visualScale = VisualScaleMetrics(
@@ -193,7 +214,8 @@ object CharacterScaleAnalyzer {
             aspectRatio = aspect,
             declaredLocalcoord = declaredLocalcoord,
             localcoordWidth = localWidth,
-            localcoordHeight = localHeight
+            localcoordHeight = localHeight,
+            declaredPortraitScale = declaredPortraitScale
         )
 
         // 2. Physical dimensions
@@ -317,6 +339,10 @@ object CharacterScaleAnalyzer {
 
     /**
      * Classifies character archetype based on identity keywords and structural metrics.
+     *
+     * CRITICAL FIX: In MUGEN / IKEMEN-GO, `height` in [size] is the collision/throw height,
+     * not visual sprite height. Hundreds of standard adult characters have height = 40 or 34.
+     * Therefore, characters are NEVER classified as TINY_SMALL based on height alone.
      */
     fun classifyArchetype(
         characterId: String,
@@ -345,18 +371,19 @@ object CharacterScaleAnalyzer {
 
         val tinyTokens = listOf("tiny", "mini", "small")
         if (tinyTokens.any { it in words }) {
-            if ((dim.height != null && dim.height <= 55) || visual.yScale <= 0.85) {
-                return ScaleArchetype.TINY_SMALL
-            }
+            return ScaleArchetype.TINY_SMALL
         }
 
-        // Check physical cues
-        val height = dim.height
+        // Only classify as TINY_SMALL if visual scale is genuinely diminutive (both <= 0.65)
+        if (visual.xScale <= 0.65 && visual.yScale <= 0.65) {
+            return ScaleArchetype.TINY_SMALL
+        }
 
+        // Check boss or tall cues
+        val height = dim.height
         return when {
             height != null && height >= 140 -> ScaleArchetype.GIANT_BOSS
             height != null && height >= 115 -> ScaleArchetype.TALL_LARGE
-            height != null && height <= 45 -> ScaleArchetype.TINY_SMALL
             else -> ScaleArchetype.STANDARD
         }
     }
@@ -387,7 +414,7 @@ object CharacterScaleAnalyzer {
                 }
             }
             ScaleArchetype.TINY_SMALL -> {
-                if (visual.xScale > 0.90 || visual.yScale > 0.90) {
+                if (visual.xScale > 0.85 || visual.yScale > 0.85) {
                     anomalies.add(ScaleAnomalyType.OVERSIZED_SPRITE)
                 }
             }
@@ -423,11 +450,22 @@ object CharacterScaleAnalyzer {
             else -> {}
         }
 
-        // 4. Pushbox scale mismatch
+        // 4. Roster Scale Deviation (for standard fighters deviating from target 1.0x by more than 8%)
+        if (archetype == ScaleArchetype.STANDARD) {
+            val avgScale = (visual.xScale + visual.yScale) / 2.0
+            if (abs(avgScale - config.autoHarmonizeRosterTarget) >= 0.08 &&
+                !anomalies.contains(ScaleAnomalyType.OVERSIZED_SPRITE) &&
+                !anomalies.contains(ScaleAnomalyType.UNDERSIZED_SPRITE)
+            ) {
+                anomalies.add(ScaleAnomalyType.ROSTER_SCALE_DEVIATION)
+            }
+        }
+
+        // 5. Pushbox scale mismatch
         val h = dim.height
         val avgScale = (visual.xScale + visual.yScale) / 2.0
         if (h != null) {
-            if (avgScale > 1.30 && h < 55) {
+            if (avgScale > 1.30 && h < 45) {
                 anomalies.add(ScaleAnomalyType.PUSHBOX_SCALE_MISMATCH)
             } else if (avgScale < 0.70 && h > 110) {
                 anomalies.add(ScaleAnomalyType.PUSHBOX_SCALE_MISMATCH)
@@ -442,18 +480,16 @@ object CharacterScaleAnalyzer {
             }
         }
 
-        // 5. Localcoord mismatch
+        // 6. Localcoord mismatch
         val lw = visual.localcoordWidth
         val lh = visual.localcoordHeight
         if (lw != null && lh != null) {
-            // High-res character (e.g. 640x480 or 1280x720) with standard scale 1.0 on a 320x240 MUGEN stage
-            // without matching engine resolution will render huge unless localcoord is parsed correctly
             if (lw >= 640 && avgScale > 1.2) {
                 anomalies.add(ScaleAnomalyType.MISSING_OR_MISMATCHED_LOCALCOORD)
             }
         }
 
-        // 6. Speed scale imbalance
+        // 7. Speed scale imbalance
         val walk = movement.walkFwd
         if (walk != null) {
             if (avgScale > 1.4 && walk > 4.5) {
@@ -491,7 +527,10 @@ object CharacterScaleAnalyzer {
                 proposedGroundFront = profile.physicalDimensions.groundFront,
                 originalGroundBack = profile.physicalDimensions.groundBack,
                 proposedGroundBack = profile.physicalDimensions.groundBack,
+                declaredLocalcoord = profile.visualScale.declaredLocalcoord,
                 proposedLocalcoord = profile.visualScale.declaredLocalcoord,
+                declaredPortraitScale = profile.visualScale.declaredPortraitScale,
+                proposedPortraitScale = profile.visualScale.declaredPortraitScale,
                 archetype = profile.archetype,
                 anomalies = emptyList(),
                 hasScaleAdjustment = false,
@@ -513,7 +552,11 @@ object CharacterScaleAnalyzer {
                     avg < config.standardScaleMin -> {
                         1.0 - (1.0 - avg) / config.dampingDivisor
                     }
-                    else -> 1.0
+                    // For roster deviation within standard range (e.g. 0.85x or 0.9x like Bayonetta/Cid)
+                    abs(avg - config.autoHarmonizeRosterTarget) >= 0.08 -> {
+                        config.autoHarmonizeRosterTarget
+                    }
+                    else -> avg
                 }
                 targetScale = targetScale.coerceIn(config.standardScaleMin, config.standardScaleMax)
             }
@@ -585,7 +628,10 @@ object CharacterScaleAnalyzer {
             proposedGroundFront = propGFront,
             originalGroundBack = origGBack,
             proposedGroundBack = propGBack,
+            declaredLocalcoord = profile.visualScale.declaredLocalcoord,
             proposedLocalcoord = profile.visualScale.declaredLocalcoord,
+            declaredPortraitScale = profile.visualScale.declaredPortraitScale,
+            proposedPortraitScale = profile.visualScale.declaredPortraitScale,
             archetype = profile.archetype,
             anomalies = anomalies,
             hasScaleAdjustment = hasScaleDiff,
@@ -612,10 +658,12 @@ object CharacterScaleAnalyzer {
             parts.add("معايرة وتصغير الحجم من ($origX, $origY) إلى $targetScale ليتوافق مع ساحة القتال وباقي الخصوم دون مظهر مفرط.")
         } else if (anomalies.contains(ScaleAnomalyType.UNDERSIZED_SPRITE)) {
             parts.add("تكبير الحجم من ($origX, $origY) إلى $targetScale ليتناسب مع الحجم التنافسي المعتاد وتمكين إصابة الضربات.")
+        } else if (anomalies.contains(ScaleAnomalyType.ROSTER_SCALE_DEVIATION)) {
+            parts.add("معايرة المقياس من (${origX}x) إلى (${targetScale}x) لمطابقة المعيار التنافسي المتوازن لباقي المقاتلين القياسيين.")
         }
 
         if (anomalies.contains(ScaleAnomalyType.PUSHBOX_SCALE_MISMATCH) && propHeight != null) {
-            parts.add("مواءمة مربع الاصطدام والارتفاع الفيزيائي إلى ${propHeight}px لمنع الضربات الوهمية خارج نطاق الجسم.")
+            parts.add("مواءمة مربع الاصطدام والارتفاع الفيزيائي إلى ${propHeight} لمنع الضربات الوهمية خارج نطاق الجسم.")
         }
 
         if (parts.isEmpty()) {

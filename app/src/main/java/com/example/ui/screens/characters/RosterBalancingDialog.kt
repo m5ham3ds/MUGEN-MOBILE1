@@ -125,7 +125,8 @@ fun RosterBalancingDialog(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // Stats Summary Card
-                val scaleNeedingCount = summary.proposals.count { it.scaleProposal?.hasScaleAdjustment == true }
+                val combatNeedingCount = summary.combatAdjustmentsCount
+                val scaleNeedingCount = summary.physicalCalibrationCount
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
@@ -145,10 +146,10 @@ fun RosterBalancingDialog(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("تعديل قتالي", style = MaterialTheme.typography.labelSmall)
                             Text(
-                                "${summary.charactersNeedingAdjustmentCount}",
+                                "$combatNeedingCount",
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
-                                    color = if (summary.charactersNeedingAdjustmentCount > 0) Color(0xFFE65100) else Color(0xFF2E7D32)
+                                    color = if (combatNeedingCount > 0) Color(0xFFE65100) else Color(0xFF2E7D32)
                                 )
                             )
                         }
@@ -186,7 +187,7 @@ fun RosterBalancingDialog(
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = { Text("السمات القتالية", style = MaterialTheme.typography.labelSmall) }
+                        text = { Text("السمات القتالية ($combatNeedingCount)", style = MaterialTheme.typography.labelSmall) }
                     )
                     Tab(
                         selected = selectedTab == 2,
@@ -499,7 +500,20 @@ fun RosterBalancingDialog(
 
                                             scaleProposal.originalHeight?.let { origH ->
                                                 val propH = scaleProposal.proposedHeight ?: origH
-                                                StatBadge(name = "الارتفاع", orig = origH, prop = propH, unit = "px")
+                                                StatBadge(name = "الارتفاع (تصادم)", orig = origH, prop = propH, unit = "px")
+                                            }
+
+                                            if (!scaleProposal.declaredLocalcoord.isNullOrBlank()) {
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "localcoord: ${scaleProposal.declaredLocalcoord}",
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                                    )
+                                                }
                                             }
 
                                             if (scaleProposal.originalGroundFront != null || scaleProposal.originalGroundBack != null) {
@@ -642,7 +656,7 @@ fun RosterBalancingDialog(
                                                     // Apply physical scale & pushbox if enabled
                                                     val sp = proposal.scaleProposal
                                                     val shouldScale = scaleAdjustmentsEnabled[proposal.characterId] != false
-                                                    if (sp != null && sp.hasScaleAdjustment && shouldScale) {
+                                                    if (sp != null && shouldScale && (sp.hasScaleAdjustment || selectedTab == 2)) {
                                                         editor.setProperty("[size]", "xscale", sp.proposedXScale.toString())
                                                         editor.setProperty("[size]", "yscale", sp.proposedYScale.toString())
                                                         sp.proposedHeight?.let { editor.setProperty("[size]", "height", it.toString()) }
@@ -667,6 +681,11 @@ fun RosterBalancingDialog(
                                             }
                                         }
                                     }
+
+                                    // Ensure fight.def has safe portrait window clipping applied
+                                    try {
+                                        FightDefManager.ensureSafePortraitClipping(context)
+                                    } catch (_: Exception) {}
                                 }
 
                                 isApplyingChanges = false
