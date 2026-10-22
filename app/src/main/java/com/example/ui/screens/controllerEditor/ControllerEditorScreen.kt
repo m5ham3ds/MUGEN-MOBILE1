@@ -432,12 +432,18 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
         val dpadRight = buttons.find { it.id == "dpad_right" }
 
         if (dpadUp != null && dpadDown != null && dpadLeft != null && dpadRight != null) {
-            val dpadCx = (dpadLeft.initialX + dpadRight.initialX) / 2f
-            val dpadCy = (dpadUp.initialY + dpadDown.initialY) / 2f
+            val dpadLeftCenter = dpadLeft.initialX + with(density) { (64.dp * dpadLeft.scale).toPx() } / 2f
+            val dpadRightCenter = dpadRight.initialX + with(density) { (64.dp * dpadRight.scale).toPx() } / 2f
+            val dpadUpCenter = dpadUp.initialY + with(density) { (64.dp * dpadUp.scale).toPx() } / 2f
+            val dpadDownCenter = dpadDown.initialY + with(density) { (64.dp * dpadDown.scale).toPx() } / 2f
+
+            val dpadCx = (dpadLeftCenter + dpadRightCenter) / 2f
+            val dpadCy = (dpadUpCenter + dpadDownCenter) / 2f
+            val avgScale = (dpadLeft.scale + dpadRight.scale + dpadUp.scale + dpadDown.scale) / 4f
 
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val hubRadius = 24.dp.toPx()
-                val outerDecalRadius = 66.dp.toPx()
+                val hubRadius = (24.dp * avgScale).toPx()
+                val outerDecalRadius = (66.dp * avgScale).toPx()
 
                 // Decorative concentric red arc segments
                 drawCircle(
@@ -1452,19 +1458,9 @@ fun ArcadeDraggableButton(
     val isSystem = buttonState.id == "btn_start" || buttonState.id == "btn_menu"
     val isMacro = buttonState.isMacro
 
-    val baseWidth = when {
-        isSystem -> 92.dp
-        isDpad -> 64.dp
-        isMacro -> 76.dp
-        else -> 66.dp
-    }
-
-    val baseHeight = when {
-        isSystem -> 46.dp
-        isDpad -> 64.dp
-        isMacro -> 66.dp
-        else -> 66.dp
-    }
+    val (baseWidthDp, baseHeightDp) = ControllerVisualSpecs.getBaseDimensionsDp(buttonState.id, buttonState.isMacro)
+    val baseWidth = baseWidthDp.dp
+    val baseHeight = baseHeightDp.dp
 
     val finalWidth = baseWidth * buttonState.scale
     val finalHeight = baseHeight * buttonState.scale
@@ -1537,19 +1533,7 @@ fun ArcadeDraggableButton(
             .alpha(buttonState.opacity.coerceIn(0.2f, 1.0f)),
         contentAlignment = Alignment.Center
     ) {
-        // Resolve effective geometry: DEFAULT falls back to component defaults, while CIRCLE/OCTAGON/CYBER explicitly override
-        val effectiveShape = when (buttonState.shape.uppercase()) {
-            "CIRCLE" -> "CIRCLE"
-            "OCTAGON" -> "OCTAGON"
-            "CYBER" -> "CYBER"
-            "DEFAULT" -> when {
-                isDpad -> "OCTAGON"
-                isSystem -> "CYBER_HEX"
-                isMacro -> "CYBER"
-                else -> "ARCADE"
-            }
-            else -> "ARCADE"
-        }
+        val effectiveShape = ControllerVisualSpecs.resolveEffectiveShape(buttonState.shape, buttonState.id, buttonState.isMacro)
 
         when (effectiveShape) {
             "OCTAGON" -> {
@@ -1957,17 +1941,7 @@ fun SystemHexButton(
 // ============================================================================
 
 fun getButtonAccentColor(id: String): Color {
-    return when (id) {
-        "btn_x" -> Color(0xFF00B0FF)      // Electric Blue
-        "btn_y" -> Color(0xFFFFB300)      // Golden Yellow
-        "btn_z" -> Color(0xFFAA00FF)      // Neon Purple
-        "btn_a" -> Color(0xFFFF1744)      // Crimson Red
-        "btn_b" -> Color(0xFF00E676)      // Emerald Green
-        "btn_c" -> Color(0xFFFF6D00)      // Radiant Orange
-        "btn_start", "btn_menu" -> Color(0xFFFF2028)
-        "dpad_up", "dpad_down", "dpad_left", "dpad_right" -> Color(0xFFFF2028)
-        else -> if (id.startsWith("macro_")) Color(0xFFFF9100) else Color(0xFFE51D24)
-    }
+    return Color(ControllerVisualSpecs.getButtonAccentColorInt(id))
 }
 
 fun getLabelForId(id: String): String {
