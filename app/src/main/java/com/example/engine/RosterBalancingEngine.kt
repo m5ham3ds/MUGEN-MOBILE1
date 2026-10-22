@@ -1,5 +1,6 @@
 package com.example.engine
 
+import com.example.engine.scale.*
 import java.io.File
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -89,7 +90,13 @@ data class CharacterStatInput(
     val life: Int?,
     val attack: Int?,
     val defence: Int?,
-    val rawError: String? = null
+    val rawError: String? = null,
+    val xScale: Double? = null,
+    val yScale: Double? = null,
+    val height: Int? = null,
+    val groundFront: Int? = null,
+    val groundBack: Int? = null,
+    val localcoord: String? = null
 )
 
 /**
@@ -107,7 +114,8 @@ data class CharacterBalanceProposal(
     val statProposals: List<StatProposal>,
     val hasAdjustments: Boolean,
     val overallSeverity: StatSeverity,
-    val overallExplanation: String
+    val overallExplanation: String,
+    val scaleProposal: CharacterScaleProposal? = null
 )
 
 /**
@@ -147,7 +155,8 @@ data class RosterBalancingSummary(
     val attackMetrics: StatMetrics?,
     val defenceMetrics: StatMetrics?,
     val proposals: List<CharacterBalanceProposal>,
-    val unanalyzableCharacters: List<UnanalyzableCharacterInfo>
+    val unanalyzableCharacters: List<UnanalyzableCharacterInfo>,
+    val scaleProposals: List<CharacterScaleProposal> = emptyList()
 )
 
 /**
@@ -435,6 +444,34 @@ object RosterBalancingEngine {
             parts.joinToString("\n")
         }
 
+        // Physical scale analysis when scale data is provided
+        val scaleProfile = if (input.xScale != null || input.yScale != null) {
+            val visual = VisualScaleMetrics(
+                xScale = input.xScale ?: 1.0,
+                yScale = input.yScale ?: 1.0,
+                aspectRatio = if ((input.yScale ?: 1.0) > 0.0) (input.xScale ?: 1.0) / (input.yScale ?: 1.0) else 1.0,
+                declaredLocalcoord = input.localcoord
+            )
+            val dim = PhysicalDimensions(
+                height = input.height,
+                groundFront = input.groundFront,
+                groundBack = input.groundBack
+            )
+            val arch = CharacterScaleAnalyzer.classifyArchetype(input.characterId, input.displayName, visual, dim)
+            val anomalies = CharacterScaleAnalyzer.detectAnomalies(visual, dim, ScaleMovementMetrics(), arch)
+            CharacterScaleProfile(
+                characterId = input.characterId,
+                displayName = input.displayName,
+                visualScale = visual,
+                physicalDimensions = dim,
+                movementMetrics = ScaleMovementMetrics(),
+                archetype = arch,
+                detectedAnomalies = anomalies
+            )
+        } else null
+
+        val scaleProposal = scaleProfile?.let { CharacterScaleAnalyzer.generateScaleProposal(it) }
+
         return CharacterBalanceProposal(
             characterId = input.characterId,
             displayName = input.displayName,
@@ -445,9 +482,10 @@ object RosterBalancingEngine {
             originalDefence = input.defence,
             proposedDefence = propDefence?.proposedValue ?: input.defence,
             statProposals = statProposals,
-            hasAdjustments = hasAdjustments,
+            hasAdjustments = hasAdjustments || (scaleProposal?.hasScaleAdjustment == true),
             overallSeverity = overallSeverity,
-            overallExplanation = overallExplanation
+            overallExplanation = overallExplanation,
+            scaleProposal = scaleProposal
         )
     }
 
@@ -491,6 +529,7 @@ object RosterBalancingEngine {
 
         val balancedCount = proposals.count { !it.hasAdjustments }
         val needingAdjustmentCount = proposals.count { it.hasAdjustments }
+        val allScaleProposals = proposals.mapNotNull { it.scaleProposal }
 
         return RosterBalancingSummary(
             totalCharactersScanned = inputs.size,
@@ -502,7 +541,8 @@ object RosterBalancingEngine {
             attackMetrics = calculateMetrics(attackValues),
             defenceMetrics = calculateMetrics(defenceValues),
             proposals = proposals,
-            unanalyzableCharacters = unanalyzable
+            unanalyzableCharacters = unanalyzable,
+            scaleProposals = allScaleProposals
         )
     }
 
@@ -542,6 +582,19 @@ object RosterBalancingEngine {
                 val attack = rawAttack?.trim()?.toIntOrNull()
                 val defence = rawDefence?.trim()?.toIntOrNull()
 
+                val rawXScale = editor.getProperty("[size]", "xscale")?.trim()?.toDoubleOrNull()
+                val rawYScale = editor.getProperty("[size]", "yscale")?.trim()?.toDoubleOrNull()
+                val rawHeight = editor.getProperty("[size]", "height")?.trim()?.toIntOrNull()
+                val rawGFront = editor.getProperty("[size]", "ground.front")?.trim()?.toIntOrNull()
+                val rawGBack = editor.getProperty("[size]", "ground.back")?.trim()?.toIntOrNull()
+
+                val defEditor = char.defFile?.let { if (it.isFile && it.canRead()) DefEditor(it) else null }
+                val rawLocalcoord = defEditor?.let {
+                    it.getProperty("info", "localcoord")
+                        ?: it.getProperty("", "localcoord")
+                        ?: it.properties.values.firstOrNull { sec -> sec.containsKey("localcoord") }?.get("localcoord")?.value
+                }
+
                 if (life == null && attack == null && defence == null) {
                     inputs.add(
                         CharacterStatInput(
@@ -550,7 +603,13 @@ object RosterBalancingEngine {
                             life = null,
                             attack = null,
                             defence = null,
-                            rawError = "تعذر قراءة خصائص [data] في ملف CNS (القيم مفقودة أو غير رقمية)"
+                            rawError = "تعذر قراءة خصائص [data] في ملف CNS (القيم مفقودة أو غير رقمية)",
+                            xScale = rawXScale,
+                            yScale = rawYScale,
+                            height = rawHeight,
+                            groundFront = rawGFront,
+                            groundBack = rawGBack,
+                            localcoord = rawLocalcoord
                         )
                     )
                 } else {
@@ -561,7 +620,13 @@ object RosterBalancingEngine {
                             life = life,
                             attack = attack,
                             defence = defence,
-                            rawError = null
+                            rawError = null,
+                            xScale = rawXScale,
+                            yScale = rawYScale,
+                            height = rawHeight,
+                            groundFront = rawGFront,
+                            groundBack = rawGBack,
+                            localcoord = rawLocalcoord
                         )
                     )
                 }

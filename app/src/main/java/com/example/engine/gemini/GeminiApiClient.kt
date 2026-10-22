@@ -46,7 +46,10 @@ data class GeminiCharacterProposal(
     val proposedAttack: Int?,
     val proposedDefence: Int?,
     val archetype: String?,
-    val rationale: String
+    val rationale: String,
+    val proposedXScale: Double? = null,
+    val proposedYScale: Double? = null,
+    val scaleRationale: String? = null
 )
 
 /**
@@ -275,17 +278,24 @@ object GeminiApiClient {
                     put("life", c.life ?: 1000)
                     put("attack", c.attack ?: 100)
                     put("defence", c.defence ?: 100)
+                    c.xScale?.let { put("xscale", it) }
+                    c.yScale?.let { put("yscale", it) }
+                    c.height?.let { put("height", it) }
+                    c.groundFront?.let { put("groundFront", it) }
+                    c.groundBack?.let { put("groundBack", it) }
+                    c.localcoord?.let { put("localcoord", it) }
                 })
             }
         }
 
         val systemInstruction = """
             أنت خبير محترف في موازنة ألعاب القتال ومحرك MUGEN.
-            مهمتك هي مراجعة إحصائيات قائمة المقاتلين واقتراح تعديلات تحافظ على توازن اللعبة مع الحفاظ الكامل على هوية المقاتل (Archetype):
-            - المقاتل الضخم أو الزعيم (Tank/Boss) يظل أثقل من المتوسط ولكنه لا يتجاوز نقاط حياة ${config.lifeDampingCap} وهجوم ${config.attackDampingCap}%.
+            مهمتك هي مراجعة إحصائيات قائمة المقاتلين وأبعادهم الفيزيائية واقتراح تعديلات تحافظ على توازن اللعبة مع الحفاظ الكامل على هوية المقاتل (Archetype):
+            - المقاتل الضخم أو الزعيم (Tank/Boss) يظل أثقل من المتوسط ولكنه لا يتجاوز نقاط حياة ${config.lifeDampingCap} وهجوم ${config.attackDampingCap}% ومقياس رسم 1.65.
             - المقاتل السريع والهش (Glass Cannon / Speedster) يظل أسرع وأقل دفاعاً ولكنه لا يقل عن نقاط حياة ${config.lifeDampingFloor} ودفاع ${config.defenceDampingFloor}%.
             - المقاتلون المتوازنون ضمن النطاق الطبيعي (Life: ${config.lifeTargetMin}-${config.lifeTargetMax}, Attack: ${config.attackTargetMin}-${config.attackTargetMax}, Defence: ${config.defenceTargetMin}-${config.defenceTargetMax}) يجب إبقاؤهم كما هم دون تعديل أو بتعديل طفيف جداً إن تطلب الأمر.
-            - اكتب شرحاً تفسيرياً واضحاً باللغة العربية لكل شخصية يوضح سبب التعديل ونوعية المقاتل.
+            - التناسق الفيزيائي (Physical Scale): حافظ دائماً على تناسب العرض والارتفاع (proposedXScale == proposedYScale) لمنع تشويه الصورة. إذا كان المقاتل كبيراً بشكل شاذ (>1.25) دون أن يكون زعيماً، اقترح تصغيره نحو 1.0. وإذا كان صغيراً جداً (<0.7) دون مبرر، اقترح تكبيره نحو 1.0.
+            - اكتب شرحاً تفسيرياً واضحاً باللغة العربية لكل شخصية يوضح سبب التعديل ونوعية المقاتل وأبعاد جسمه.
         """.trimIndent()
 
         // Structured Schema definition for Gemini REST API (v1beta) using standard camelCase
@@ -300,6 +310,9 @@ object GeminiApiClient {
                     put("proposedDefence", JSONObject().put("type", "INTEGER"))
                     put("archetype", JSONObject().put("type", "STRING"))
                     put("rationale", JSONObject().put("type", "STRING"))
+                    put("proposedXScale", JSONObject().put("type", "NUMBER"))
+                    put("proposedYScale", JSONObject().put("type", "NUMBER"))
+                    put("scaleRationale", JSONObject().put("type", "STRING"))
                 }
                 put("properties", properties)
                 put("required", JSONArray().apply {
@@ -474,6 +487,9 @@ object GeminiApiClient {
                         val defence = if (item.has("proposedDefence") && !item.isNull("proposedDefence")) item.optInt("proposedDefence") else null
                         val archetype = if (item.has("archetype") && !item.isNull("archetype")) item.optString("archetype") else null
                         val rationale = item.optString("rationale", "")
+                        val xScale = if (item.has("proposedXScale") && !item.isNull("proposedXScale")) item.optDouble("proposedXScale") else null
+                        val yScale = if (item.has("proposedYScale") && !item.isNull("proposedYScale")) item.optDouble("proposedYScale") else null
+                        val scaleRationale = if (item.has("scaleRationale") && !item.isNull("scaleRationale")) item.optString("scaleRationale") else null
 
                         if (id.isNotEmpty()) {
                             parsedList.add(
@@ -483,7 +499,10 @@ object GeminiApiClient {
                                     proposedAttack = attack,
                                     proposedDefence = defence,
                                     archetype = archetype,
-                                    rationale = rationale
+                                    rationale = rationale,
+                                    proposedXScale = xScale,
+                                    proposedYScale = yScale,
+                                    scaleRationale = scaleRationale
                                 )
                             )
                         }

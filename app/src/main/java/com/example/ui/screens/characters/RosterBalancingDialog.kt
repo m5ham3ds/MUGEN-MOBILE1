@@ -22,12 +22,14 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.engine.*
 import com.example.engine.gemini.GeminiRosterBalancer
+import com.example.engine.scale.*
 import com.example.engine.workspace.ChangeRecord
 import com.example.engine.workspace.CharacterWorkspaceManager
 import com.example.utils.GeminiKeyStoreManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 @Composable
 fun RosterBalancingDialog(
@@ -45,11 +47,19 @@ fun RosterBalancingDialog(
     var isLoadingAi by remember { mutableStateOf(false) }
     var aiErrorMessage by remember { mutableStateOf<String?>(null) }
     var isApplyingChanges by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableStateOf(0) } // 0: All, 1: Combat Stats, 2: Physical Scale
 
     // Maintain selected IDs; default to all characters with adjustments
     val selectedCharacterIds = remember {
         mutableStateMapOf<String, Boolean>().apply {
             summary.proposals.filter { it.hasAdjustments }.forEach { put(it.characterId, true) }
+        }
+    }
+
+    // Toggle to allow enabling/disabling scale adjustments per character
+    val scaleAdjustmentsEnabled = remember {
+        mutableStateMapOf<String, Boolean>().apply {
+            summary.proposals.filter { it.scaleProposal?.hasScaleAdjustment == true }.forEach { put(it.characterId, true) }
         }
     }
 
@@ -61,16 +71,16 @@ fun RosterBalancingDialog(
     ) {
         Card(
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.92f)
-                .padding(vertical = 16.dp),
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.94f)
+                .padding(vertical = 12.dp),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(20.dp)
+                    .padding(16.dp)
             ) {
                 // Header Row
                 Row(
@@ -88,11 +98,11 @@ fun RosterBalancingDialog(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "موازنة وتناغم القائمة",
+                                text = "موازنة وتناغم المقاتلين والفيزياء",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = if (isAiPowered) "تحليل ذكي مدعوم بـ Google Gemini (gemini-3.8-flash)" else "تحليل رياضي محافظ على الهوية",
+                                text = if (isAiPowered) "تحليل ذكي شامل مدعوم بـ Google Gemini (gemini-3.8-flash)" else "تحليل رياضي ومحلي للأبعاد والقتال",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isAiPowered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -112,9 +122,10 @@ fun RosterBalancingDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Stats Summary Card
+                val scaleNeedingCount = summary.proposals.count { it.scaleProposal?.hasScaleAdjustment == true }
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
@@ -123,7 +134,7 @@ fun RosterBalancingDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
+                            .padding(10.dp),
                         horizontalArrangement = Arrangement.SpaceAround,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -132,7 +143,7 @@ fun RosterBalancingDialog(
                             Text("${summary.totalCharactersScanned}", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("تحتاج لتعديل", style = MaterialTheme.typography.labelSmall)
+                            Text("تعديل قتالي", style = MaterialTheme.typography.labelSmall)
                             Text(
                                 "${summary.charactersNeedingAdjustmentCount}",
                                 style = MaterialTheme.typography.titleMedium.copy(
@@ -142,10 +153,46 @@ fun RosterBalancingDialog(
                             )
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("معايرة فيزيائية", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                "$scaleNeedingCount",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (scaleNeedingCount > 0) Color(0xFF1976D2) else Color(0xFF2E7D32)
+                                )
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("متوازنة", style = MaterialTheme.typography.labelSmall)
                             Text("${summary.balancedCharactersCount}", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32)))
                         }
                     }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Filter Tabs (All / Combat Stats / Physical Scale)
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    modifier = Modifier.fillMaxWidth(),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = { Text("الكل (${summary.proposals.size})", style = MaterialTheme.typography.labelSmall) }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = { Text("السمات القتالية", style = MaterialTheme.typography.labelSmall) }
+                    )
+                    Tab(
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        text = { Text("المقياس والأبعاد ($scaleNeedingCount)", style = MaterialTheme.typography.labelSmall) }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -163,12 +210,24 @@ fun RosterBalancingDialog(
                                     if (cns != null && cns.isFile) {
                                         try {
                                             val editor = CnsEditor(cns)
+                                            val defEditor = char.defFile?.let { if (it.isFile && it.canRead()) DefEditor(it) else null }
+                                            val rawLc = defEditor?.let {
+                                                it.getProperty("info", "localcoord")
+                                                    ?: it.getProperty("", "localcoord")
+                                                    ?: it.properties.values.firstOrNull { sec -> sec.containsKey("localcoord") }?.get("localcoord")?.value
+                                            }
                                             CharacterStatInput(
                                                 characterId = char.folderName,
                                                 displayName = char.displayName,
                                                 life = editor.getProperty("[data]", "life")?.trim()?.toIntOrNull(),
                                                 attack = editor.getProperty("[data]", "attack")?.trim()?.toIntOrNull(),
-                                                defence = editor.getProperty("[data]", "defence")?.trim()?.toIntOrNull()
+                                                defence = editor.getProperty("[data]", "defence")?.trim()?.toIntOrNull(),
+                                                xScale = editor.getProperty("[size]", "xscale")?.trim()?.toDoubleOrNull(),
+                                                yScale = editor.getProperty("[size]", "yscale")?.trim()?.toDoubleOrNull(),
+                                                height = editor.getProperty("[size]", "height")?.trim()?.toIntOrNull(),
+                                                groundFront = editor.getProperty("[size]", "ground.front")?.trim()?.toIntOrNull(),
+                                                groundBack = editor.getProperty("[size]", "ground.back")?.trim()?.toIntOrNull(),
+                                                localcoord = rawLc
                                             )
                                         } catch (_: Exception) {
                                             null
@@ -183,12 +242,15 @@ fun RosterBalancingDialog(
                                 aiErrorMessage = result.aiErrorMessage
 
                                 if (result.isAiPowered) {
-                                    // Update selections for new adjustments
                                     selectedCharacterIds.clear()
                                     summary.proposals.filter { it.hasAdjustments }.forEach {
                                         selectedCharacterIds[it.characterId] = true
                                     }
-                                    Toast.makeText(context, "تم تطبيق مقترحات Gemini AI بنجاح", Toast.LENGTH_SHORT).show()
+                                    scaleAdjustmentsEnabled.clear()
+                                    summary.proposals.filter { it.scaleProposal?.hasScaleAdjustment == true }.forEach {
+                                        scaleAdjustmentsEnabled[it.characterId] = true
+                                    }
+                                    Toast.makeText(context, "تم تطبيق مقترحات Gemini AI الشاملة بنجاح", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         },
@@ -198,11 +260,11 @@ fun RosterBalancingDialog(
                         if (isLoadingAi) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("جارٍ التحليل بواسطة Gemini AI...", style = MaterialTheme.typography.bodySmall)
+                            Text("جارٍ التحليل الشامل بواسطة Gemini AI...", style = MaterialTheme.typography.bodySmall)
                         } else {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isAiPowered) "إعادة التحليل بواسطة Gemini AI" else "تحليل ذكي مخصص بواسطة Gemini AI")
+                            Text(if (isAiPowered) "إعادة التحليل بواسطة Gemini AI" else "تحليل ذكي شامل للأبعاد والقتال بواسطة Gemini AI")
                         }
                     }
                 } else {
@@ -218,7 +280,7 @@ fun RosterBalancingDialog(
                             Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                "يمكنك إضافة مفتاح Gemini في الإعدادات للحصول على مقترحات موازنة ذكية ومفسرة.",
+                                "يمكنك إضافة مفتاح Gemini في الإعدادات للحصول على موازنة ذكية ومعايرة أبعاد مفسرة.",
                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
@@ -258,9 +320,17 @@ fun RosterBalancingDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Scrollable Proposals List
-                val charactersNeedingAdjustment = summary.proposals.filter { it.hasAdjustments }
-                val balancedCharacters = summary.proposals.filter { !it.hasAdjustments }
+                // Filter proposals according to tab
+                val filteredProposals = remember(summary, selectedTab) {
+                    when (selectedTab) {
+                        1 -> summary.proposals.filter { it.statProposals.isNotEmpty() }
+                        2 -> summary.proposals.filter { it.scaleProposal?.hasScaleAdjustment == true }
+                        else -> summary.proposals
+                    }
+                }
+
+                val charactersNeedingAdjustment = filteredProposals.filter { it.hasAdjustments }
+                val balancedCharacters = filteredProposals.filter { !it.hasAdjustments }
 
                 LazyColumn(
                     modifier = Modifier
@@ -279,6 +349,9 @@ fun RosterBalancingDialog(
 
                         items(charactersNeedingAdjustment) { proposal ->
                             val isSelected = selectedCharacterIds[proposal.characterId] ?: false
+                            val scaleProposal = proposal.scaleProposal
+                            val isScaleEnabled = scaleAdjustmentsEnabled[proposal.characterId] ?: (scaleProposal?.hasScaleAdjustment == true)
+
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
@@ -288,6 +361,7 @@ fun RosterBalancingDialog(
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
+                                    // Top Row: Checkbox, Name, Archetype, Severity
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -315,25 +389,40 @@ fun RosterBalancingDialog(
                                             }
                                         }
 
-                                        Surface(
-                                            color = when (proposal.overallSeverity) {
-                                                StatSeverity.EXTREME_OUTLIER -> Color(0xFFB71C1C)
-                                                StatSeverity.OUT_OF_TARGET_RANGE -> Color(0xFFE65100)
-                                                else -> Color(0xFF2E7D32)
-                                            },
-                                            shape = RoundedCornerShape(4.dp)
-                                        ) {
-                                            Text(
-                                                text = proposal.overallSeverity.arabicLabel,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                style = MaterialTheme.typography.labelSmall.copy(color = Color.White, fontSize = 10.sp)
-                                            )
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            if (scaleProposal != null) {
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = scaleProposal.archetype.arabicLabel.substringBefore("(").trim(),
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp)
+                                                    )
+                                                }
+                                            }
+
+                                            Surface(
+                                                color = when (proposal.overallSeverity) {
+                                                    StatSeverity.EXTREME_OUTLIER -> Color(0xFFB71C1C)
+                                                    StatSeverity.OUT_OF_TARGET_RANGE -> Color(0xFFE65100)
+                                                    else -> Color(0xFF2E7D32)
+                                                },
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = proposal.overallSeverity.arabicLabel,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    style = MaterialTheme.typography.labelSmall.copy(color = Color.White, fontSize = 9.sp)
+                                                )
+                                            }
                                         }
                                     }
 
                                     Spacer(modifier = Modifier.height(6.dp))
 
-                                    // Stats diffs: FlowRow to prevent cramped letter-by-letter wrapping on mobile
+                                    // Combat Stats Badges Row
                                     @OptIn(ExperimentalLayoutApi::class)
                                     FlowRow(
                                         modifier = Modifier.fillMaxWidth(),
@@ -354,9 +443,117 @@ fun RosterBalancingDialog(
                                         }
                                     }
 
+                                    // Physical Scale Badges Row
+                                    if (scaleProposal != null) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f))
+                                        Spacer(modifier = Modifier.height(6.dp))
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.AspectRatio,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(14.dp),
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    "الأبعاد والمقياس الفيزيائي",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                                )
+                                            }
+
+                                            if (scaleProposal.hasScaleAdjustment) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text("معايرة الحجم", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp))
+                                                    Checkbox(
+                                                        checked = isScaleEnabled,
+                                                        onCheckedChange = { checked ->
+                                                            scaleAdjustmentsEnabled[proposal.characterId] = checked
+                                                        },
+                                                        modifier = Modifier.size(24.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+
+                                        @OptIn(ExperimentalLayoutApi::class)
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            ScaleFactorBadge(
+                                                origX = scaleProposal.originalXScale,
+                                                origY = scaleProposal.originalYScale,
+                                                propX = scaleProposal.proposedXScale,
+                                                propY = scaleProposal.proposedYScale
+                                            )
+
+                                            scaleProposal.originalHeight?.let { origH ->
+                                                val propH = scaleProposal.proposedHeight ?: origH
+                                                StatBadge(name = "الارتفاع", orig = origH, prop = propH, unit = "px")
+                                            }
+
+                                            if (scaleProposal.originalGroundFront != null || scaleProposal.originalGroundBack != null) {
+                                                val origG = "[${scaleProposal.originalGroundFront ?: 0}, ${scaleProposal.originalGroundBack ?: 0}]"
+                                                val propG = "[${scaleProposal.proposedGroundFront ?: scaleProposal.originalGroundFront ?: 0}, ${scaleProposal.proposedGroundBack ?: scaleProposal.originalGroundBack ?: 0}]"
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "الدفع: $origG → $propG",
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // Anomalies Badges if present
+                                        if (scaleProposal.anomalies.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            @OptIn(ExperimentalLayoutApi::class)
+                                            FlowRow(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                for (anomaly in scaleProposal.anomalies) {
+                                                    Surface(
+                                                        color = Color(0xFFFFF3E0),
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = anomaly.arabicDescription,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFFE65100), fontSize = 9.sp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (scaleProposal.arabicRationale.isNotBlank() && scaleProposal.hasScaleAdjustment) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "توجيه الأبعاد: ${scaleProposal.arabicRationale}",
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f))
+                                            )
+                                        }
+                                    }
+
                                     Spacer(modifier = Modifier.height(6.dp))
 
-                                    // Explanation text
+                                    // Combat explanation text
                                     Text(
                                         text = proposal.overallExplanation,
                                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp),
@@ -378,6 +575,7 @@ fun RosterBalancingDialog(
                         }
 
                         items(balancedCharacters) { balanced ->
+                            val sp = balanced.scaleProposal
                             Surface(
                                 modifier = Modifier.fillMaxWidth(),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
@@ -393,7 +591,7 @@ fun RosterBalancingDialog(
                                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium)
                                     )
                                     Text(
-                                        text = "متوازن (Life: ${balanced.originalLife ?: 1000}, Att: ${balanced.originalAttack ?: 100}%, Def: ${balanced.originalDefence ?: 100}%)",
+                                        text = "متوازن (Life: ${balanced.originalLife ?: 1000}, Scale: ${sp?.originalXScale ?: 1.0}x, Height: ${sp?.originalHeight ?: 60}px)",
                                         style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32), fontSize = 10.sp)
                                     )
                                 }
@@ -402,7 +600,7 @@ fun RosterBalancingDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Bottom Action Buttons
                 val selectedCount = selectedCharacterIds.values.count { it }
@@ -427,31 +625,40 @@ fun RosterBalancingDialog(
 
                                 withContext(Dispatchers.IO) {
                                     val charMap = characters.associateBy { it.folderName }
-                                    for (proposal in charactersNeedingAdjustment) {
+                                    for (proposal in summary.proposals) {
                                         if (selectedCharacterIds[proposal.characterId] == true) {
                                             val charData = charMap[proposal.characterId]
                                             val cns = charData?.cnsFile
                                             if (cns != null && cns.isFile) {
                                                 try {
                                                     val editor = CnsEditor(cns)
+                                                    val defEditor = charData.defFile?.let { if (it.isFile && it.canRead()) DefEditor(it) else null }
+
+                                                    // Apply combat stats
                                                     proposal.proposedLife?.let { editor.setProperty("[data]", "life", it.toString()) }
                                                     proposal.proposedAttack?.let { editor.setProperty("[data]", "attack", it.toString()) }
                                                     proposal.proposedDefence?.let { editor.setProperty("[data]", "defence", it.toString()) }
 
-                                                    val saveRes = CharacterWorkspaceManager.saveCnsChanges(
-                                                        cnsEditor = editor,
+                                                    // Apply physical scale & pushbox if enabled
+                                                    val sp = proposal.scaleProposal
+                                                    val shouldScale = scaleAdjustmentsEnabled[proposal.characterId] != false
+                                                    if (sp != null && sp.hasScaleAdjustment && shouldScale) {
+                                                        editor.setProperty("[size]", "xscale", sp.proposedXScale.toString())
+                                                        editor.setProperty("[size]", "yscale", sp.proposedYScale.toString())
+                                                        sp.proposedHeight?.let { editor.setProperty("[size]", "height", it.toString()) }
+                                                        sp.proposedGroundFront?.let { editor.setProperty("[size]", "ground.front", it.toString()) }
+                                                        sp.proposedGroundBack?.let { editor.setProperty("[size]", "ground.back", it.toString()) }
+
+                                                        if (defEditor != null && sp.proposedLocalcoord != null) {
+                                                            defEditor.setProperty("info", "localcoord", sp.proposedLocalcoord)
+                                                        }
+                                                    }
+
+                                                    val saveRes = CharacterWorkspaceManager.saveCompleteCharacterEdits(
                                                         characterId = proposal.characterId,
-                                                        context = context,
-                                                        changes = listOf(
-                                                            ChangeRecord(
-                                                                relativePath = cns.name,
-                                                                section = "[data]",
-                                                                key = "balance",
-                                                                oldValue = "original",
-                                                                newValue = "balanced",
-                                                                source = if (isAiPowered) "GEMINI_ROSTER_BALANCE" else "AUTO_ROSTER_BALANCE"
-                                                            )
-                                                        )
+                                                        defEditor = defEditor,
+                                                        cnsEditor = editor,
+                                                        context = context
                                                     )
                                                     if (saveRes.success) {
                                                         appliedCount++
@@ -465,7 +672,7 @@ fun RosterBalancingDialog(
                                 isApplyingChanges = false
                                 Toast.makeText(
                                     context,
-                                    "تم بنجاح تطبيق الموازنة على $appliedCount شخصيات في مساحة العمل",
+                                    "تم بنجاح تطبيق الموازنة ومعايرة الأبعاد على $appliedCount مقاتلين في مساحة العمل",
                                     Toast.LENGTH_LONG
                                 ).show()
                                 onApplied()
@@ -482,7 +689,7 @@ fun RosterBalancingDialog(
                         } else {
                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("تطبيق الموازنة ($selectedCount)", maxLines = 1)
+                            Text("تطبيق الموازنة والأبعاد ($selectedCount)", maxLines = 1)
                         }
                     }
                 }
@@ -521,6 +728,35 @@ private fun StatBadge(name: String, orig: Int, prop: Int, unit: String) {
                         fontWeight = FontWeight.SemiBold,
                         color = if (delta > 0) Color(0xFF2E7D32) else Color(0xFFC62828)
                     ),
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScaleFactorBadge(origX: Double, origY: Double, propX: Double, propY: Double) {
+    val isChanged = abs(propX - origX) > 0.005 || abs(propY - origY) > 0.005
+    Surface(
+        color = if (isChanged) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val origStr = if (origX == origY) "${origX}x" else "${origX}x${origY}"
+            val propStr = if (propX == propY) "${propX}x" else "${propX}x${propY}"
+            Text(
+                text = "المقياس: $origStr",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                maxLines = 1
+            )
+            if (isChanged) {
+                Text(
+                    text = " → $propStr",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary),
                     maxLines = 1
                 )
             }

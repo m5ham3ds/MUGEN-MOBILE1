@@ -1,6 +1,9 @@
 package com.example.engine.gemini
 
 import com.example.engine.*
+import com.example.engine.scale.*
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Result of roster balance analysis, containing either AI-enhanced or purely mathematical proposals.
@@ -174,7 +177,65 @@ object GeminiRosterBalancer {
                 )
             }
 
-            val hasAdjustments = statProposals.isNotEmpty()
+            // Validate and merge scale proposal
+            val baseScale = baselineProposal.scaleProposal
+            val validatedScaleProposal = if (geminiProp.proposedXScale != null || geminiProp.proposedYScale != null) {
+                val origX = baseScale?.originalXScale ?: input.xScale ?: 1.0
+                val origY = baseScale?.originalYScale ?: input.yScale ?: 1.0
+                val rawX = geminiProp.proposedXScale ?: origX
+                val rawY = geminiProp.proposedYScale ?: origY
+                // Clamping between 0.35 and 2.50
+                val clampedX = rawX.coerceIn(0.35, 2.50)
+                val clampedY = rawY.coerceIn(0.35, 2.50)
+                // Enforce proportional aspect ratio
+                val targetScale = if (abs(clampedX - clampedY) > 0.05) {
+                    (clampedX + clampedY) / 2.0
+                } else clampedX
+                val roundedScale = (targetScale * 1000.0).roundToInt() / 1000.0
+
+                val hasDiff = abs(roundedScale - origX) > 0.005 || abs(roundedScale - origY) > 0.005
+                val multiplier = if (origY > 0.0) roundedScale / origY else 1.0
+
+                val origH = baseScale?.originalHeight ?: input.height
+                val propH = if (hasDiff && origH != null && origH > 0) (origH * multiplier).roundToInt().coerceIn(20, 200) else origH
+
+                val origGF = baseScale?.originalGroundFront ?: input.groundFront
+                val propGF = if (hasDiff && origGF != null && origGF > 0) (origGF * multiplier).roundToInt().coerceIn(5, 80) else origGF
+
+                val origGB = baseScale?.originalGroundBack ?: input.groundBack
+                val propGB = if (hasDiff && origGB != null && origGB > 0) (origGB * multiplier).roundToInt().coerceIn(5, 80) else origGB
+
+                val scaleExplanation = if (!geminiProp.scaleRationale.isNullOrBlank()) {
+                    "[Gemini AI] ${geminiProp.scaleRationale}"
+                } else {
+                    baseScale?.arabicRationale ?: "تمت معايرة المقياس والأبعاد الفيزيائية بواسطة الذكاء الاصطناعي."
+                }
+
+                CharacterScaleProposal(
+                    characterId = charId,
+                    displayName = baselineProposal.displayName,
+                    originalXScale = origX,
+                    proposedXScale = roundedScale,
+                    originalYScale = origY,
+                    proposedYScale = roundedScale,
+                    originalHeight = origH,
+                    proposedHeight = propH,
+                    originalGroundFront = origGF,
+                    proposedGroundFront = propGF,
+                    originalGroundBack = origGB,
+                    proposedGroundBack = propGB,
+                    proposedLocalcoord = baseScale?.proposedLocalcoord ?: input.localcoord,
+                    archetype = baseScale?.archetype ?: ScaleArchetype.STANDARD,
+                    anomalies = baseScale?.anomalies ?: emptyList(),
+                    hasScaleAdjustment = hasDiff,
+                    arabicRationale = scaleExplanation,
+                    isAiGenerated = true
+                )
+            } else {
+                baseScale
+            }
+
+            val hasAdjustments = statProposals.isNotEmpty() || (validatedScaleProposal?.hasScaleAdjustment == true)
             val overallSeverity = baselineProposal.overallSeverity
             val overallExplanation = if (geminiProp.rationale.isNotBlank()) {
                 val archetypeStr = if (!geminiProp.archetype.isNullOrBlank()) " [فئة المقاتل: ${geminiProp.archetype}]" else ""
@@ -196,18 +257,21 @@ object GeminiRosterBalancer {
                     statProposals = statProposals,
                     hasAdjustments = hasAdjustments,
                     overallSeverity = overallSeverity,
-                    overallExplanation = overallExplanation
+                    overallExplanation = overallExplanation,
+                    scaleProposal = validatedScaleProposal
                 )
             )
         }
 
         val balancedCount = newProposals.count { !it.hasAdjustments }
         val needingAdjustmentCount = newProposals.count { it.hasAdjustments }
+        val allScaleProposals = newProposals.mapNotNull { it.scaleProposal }
 
         return baselineSummary.copy(
             proposals = newProposals,
             balancedCharactersCount = balancedCount,
-            charactersNeedingAdjustmentCount = needingAdjustmentCount
+            charactersNeedingAdjustmentCount = needingAdjustmentCount,
+            scaleProposals = allScaleProposals
         )
     }
 
