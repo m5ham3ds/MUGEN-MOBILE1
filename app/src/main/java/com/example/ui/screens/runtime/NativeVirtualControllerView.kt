@@ -1,10 +1,7 @@
 package com.example.ui.screens.runtime
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Typeface
+import android.graphics.*
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
@@ -22,6 +19,8 @@ import kotlin.math.hypot
  * 1. Zero Compose runtime overhead and zero ViewTreeLifecycleOwner dependencies.
  * 2. High-performance multi-touch handling for fighting game combos and diagonals.
  * 3. Direct dispatch to SDLActivity.onNativeKeyDown / onNativeKeyUp.
+ * 4. Full runtime support for custom button shapes (DEFAULT, CIRCLE, OCTAGON, CYBER)
+ *    and per-button fighting game accent colors (matching ControllerEditorScreen).
  */
 class NativeVirtualControllerView @JvmOverloads constructor(
     context: Context,
@@ -37,7 +36,8 @@ class NativeVirtualControllerView @JvmOverloads constructor(
         val label: String,
         var opacity: Float = 0.7f,
         var isEnabled: Boolean = true,
-        var isMacro: Boolean = false
+        var isMacro: Boolean = false,
+        var shape: String = "DEFAULT"
     )
 
     var onButtonPressed: ((String) -> Unit)? = null
@@ -47,30 +47,28 @@ class NativeVirtualControllerView @JvmOverloads constructor(
     private val pointerButtonMap = HashMap<Int, String>()
     private val pressedButtonIds = HashSet<String>()
 
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.argb(60, 255, 255, 255)
-    }
-
-    private val pressedBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.argb(160, 230, 45, 45) // Vivid fighting game red
     }
 
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 3f * context.resources.displayMetrics.density
-        color = Color.argb(130, 255, 255, 255)
+        strokeWidth = 2.5f * context.resources.displayMetrics.density
     }
 
-    private val macroBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 3.5f * context.resources.displayMetrics.density
-        color = Color.argb(220, 255, 193, 7) // Amber/Gold for Macro / Charge
+        strokeWidth = 4f * context.resources.displayMetrics.density
     }
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+
+    private val textShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(200, 0, 0, 0)
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
@@ -97,6 +95,7 @@ class NativeVirtualControllerView @JvmOverloads constructor(
 
     /**
      * Updates button layout from saved JSON or defaults.
+     * Restores id, coordinates, scale, opacity, enabled, macro, and custom button shapes.
      */
     fun updateLayoutFromJson(jsonStr: String?, width: Float = this.width.toFloat(), height: Float = this.height.toFloat()) {
         val w = if (width > 0) width else context.resources.displayMetrics.widthPixels.toFloat()
@@ -113,6 +112,7 @@ class NativeVirtualControllerView @JvmOverloads constructor(
                     val isEnabled = if (obj.has("enabled")) obj.getBoolean("enabled") else !isMacro
                     val scale = if (obj.has("scale")) obj.getDouble("scale").toFloat() else 1.0f
                     val opacity = if (obj.has("opacity")) obj.getDouble("opacity").toFloat() else 0.7f
+                    val shape = obj.optString("shape", "DEFAULT")
 
                     loaded.add(
                         ControllerButtonState(
@@ -123,7 +123,8 @@ class NativeVirtualControllerView @JvmOverloads constructor(
                             scale = scale,
                             opacity = opacity,
                             isEnabled = isEnabled,
-                            isMacro = isMacro
+                            isMacro = isMacro,
+                            shape = shape
                         )
                     )
                 }
@@ -132,7 +133,7 @@ class NativeVirtualControllerView @JvmOverloads constructor(
                     return
                 }
             } catch (e: Exception) {
-                // Fall back to default
+                // Fall back to default preset on error
             }
         }
         loadDefaultPreset(w, h)
@@ -159,7 +160,8 @@ class NativeVirtualControllerView @JvmOverloads constructor(
                     label = btn.label,
                     opacity = btn.opacity,
                     isEnabled = btn.isEnabled,
-                    isMacro = btn.isMacro
+                    isMacro = btn.isMacro,
+                    shape = btn.shape
                 )
             )
         }
@@ -276,42 +278,268 @@ class NativeVirtualControllerView @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
+    /**
+     * Resolves the button's accent fighting color.
+     */
+    private fun getButtonAccentColor(id: String): Int {
+        return when (id) {
+            "btn_x" -> Color.rgb(0, 176, 255)       // Electric Blue
+            "btn_y" -> Color.rgb(255, 179, 0)       // Golden Yellow
+            "btn_z" -> Color.rgb(170, 0, 255)       // Neon Purple
+            "btn_a" -> Color.rgb(255, 23, 68)       // Crimson Red
+            "btn_b" -> Color.rgb(0, 230, 118)       // Emerald Green
+            "btn_c" -> Color.rgb(255, 109, 0)       // Radiant Orange
+            "btn_start", "btn_menu" -> Color.rgb(255, 32, 40)
+            "dpad_up", "dpad_down", "dpad_left", "dpad_right" -> Color.rgb(255, 32, 40)
+            else -> if (id.startsWith("macro_")) Color.rgb(255, 145, 0) else Color.rgb(237, 37, 45)
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
         for (btn in buttonModels) {
             val isPressed = pressedButtonIds.contains(btn.id)
             val alphaMult = btn.opacity.coerceIn(0.1f, 1.0f)
+            val accentColor = getButtonAccentColor(btn.id)
 
-            // Draw circular background
-            val baseFillAlpha = if (isPressed) (180 * alphaMult).toInt() else (65 * alphaMult).toInt()
-            val fillPaint = if (isPressed) {
-                if (btn.isMacro) {
-                    Paint(pressedBgPaint).apply { color = Color.argb((200 * alphaMult).toInt(), 255, 140, 0) }
-                } else {
-                    Paint(pressedBgPaint).apply { alpha = (180 * alphaMult).toInt() }
+            // Determine effective shape (DEFAULT, CIRCLE, OCTAGON, CYBER, or CYBER_HEX for system)
+            val effectiveShape = when (btn.shape.uppercase()) {
+                "CIRCLE" -> "CIRCLE"
+                "OCTAGON" -> "OCTAGON"
+                "CYBER" -> "CYBER"
+                "DEFAULT" -> when {
+                    btn.id.startsWith("dpad_") -> "OCTAGON"
+                    btn.id == "btn_start" || btn.id == "btn_menu" -> "CYBER_HEX"
+                    btn.isMacro -> "CYBER"
+                    else -> "ARCADE"
                 }
-            } else {
-                Paint(bgPaint).apply { alpha = baseFillAlpha }
+                else -> "ARCADE"
             }
-            canvas.drawCircle(btn.centerX, btn.centerY, btn.radius, fillPaint)
 
-            // Draw border ring
-            val bPaint = if (btn.isMacro) {
-                Paint(macroBorderPaint).apply { alpha = (230 * alphaMult).toInt() }
-            } else {
-                Paint(borderPaint).apply { alpha = (150 * alphaMult).toInt() }
+            val cx = btn.centerX
+            val cy = btn.centerY
+            val r = btn.radius
+
+            when (effectiveShape) {
+                "OCTAGON" -> {
+                    drawOctagonButton(canvas, cx, cy, r, btn.label, accentColor, isPressed, alphaMult)
+                }
+                "CYBER" -> {
+                    drawCyberButton(canvas, cx, cy, r, btn.label, accentColor, isPressed, alphaMult)
+                }
+                "CYBER_HEX" -> {
+                    drawCyberHexButton(canvas, cx, cy, r, btn.label, accentColor, isPressed, alphaMult)
+                }
+                "CIRCLE", "ARCADE" -> {
+                    drawCircleButton(canvas, cx, cy, r, btn.label, accentColor, isPressed, alphaMult)
+                }
             }
-            canvas.drawCircle(btn.centerX, btn.centerY, btn.radius, bPaint)
-
-            // Dynamic text size based on button radius
-            val textPx = (btn.radius * 0.65f).coerceIn(14f, 40f)
-            textPaint.textSize = textPx
-            textPaint.alpha = (255 * alphaMult).toInt()
-
-            val fontMetrics = textPaint.fontMetrics
-            val baseline = btn.centerY - (fontMetrics.descent + fontMetrics.ascent) / 2f
-            canvas.drawText(btn.label, btn.centerX, baseline, textPaint)
         }
+    }
+
+    /**
+     * Renders a circular arcade-style button with titanium bezel and glowing neon ring.
+     */
+    private fun drawCircleButton(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        r: Float,
+        label: String,
+        accentColor: Int,
+        isPressed: Boolean,
+        alphaMult: Float
+    ) {
+        // 1. Titanium Bezel
+        fillPaint.color = Color.argb((180 * alphaMult).toInt(), 30, 32, 42)
+        canvas.drawCircle(cx, cy, r, fillPaint)
+
+        // Bezel rim highlight
+        borderPaint.color = Color.argb((140 * alphaMult).toInt(), 80, 85, 105)
+        canvas.drawCircle(cx, cy, r, borderPaint)
+
+        // 2. Colored Neon Ring
+        val ringR = r * 0.88f
+        val neonAlpha = if (isPressed) 255 else (180 * alphaMult).toInt()
+        glowPaint.color = Color.argb(neonAlpha, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor))
+        canvas.drawCircle(cx, cy, ringR, glowPaint)
+
+        // 3. Concave Colored Dish
+        val dishR = r * 0.78f
+        val dishFillAlpha = if (isPressed) (230 * alphaMult).toInt() else (120 * alphaMult).toInt()
+        fillPaint.color = Color.argb(dishFillAlpha, Color.red(accentColor) / 2, Color.green(accentColor) / 2, Color.blue(accentColor) / 2)
+        canvas.drawCircle(cx, cy, dishR, fillPaint)
+
+        // 4. Text Label
+        drawCenteredText(canvas, cx, cy, r, label, alphaMult)
+    }
+
+    /**
+     * Renders a 3D faceted octagonal button.
+     */
+    private fun drawOctagonButton(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        r: Float,
+        label: String,
+        accentColor: Int,
+        isPressed: Boolean,
+        alphaMult: Float
+    ) {
+        val cut = r * 0.32f
+        val octPath = Path().apply {
+            moveTo(cx - r + cut, cy - r)
+            lineTo(cx + r - cut, cy - r)
+            lineTo(cx + r, cy - r + cut)
+            lineTo(cx + r, cy + r - cut)
+            lineTo(cx + r - cut, cy + r)
+            lineTo(cx - r + cut, cy + r)
+            lineTo(cx - r, cy + r - cut)
+            lineTo(cx - r, cy - r + cut)
+            close()
+        }
+
+        // Dark graphite metallic body fill
+        val bodyAlpha = if (isPressed) (220 * alphaMult).toInt() else (160 * alphaMult).toInt()
+        val fillR = if (isPressed) Color.red(accentColor) / 2 else 28
+        val fillG = if (isPressed) Color.green(accentColor) / 2 else 30
+        val fillB = if (isPressed) Color.blue(accentColor) / 2 else 38
+        fillPaint.color = Color.argb(bodyAlpha, fillR, fillG, fillB)
+        canvas.drawPath(octPath, fillPaint)
+
+        // Specular outer border
+        borderPaint.color = Color.argb((120 * alphaMult).toInt(), 80, 85, 105)
+        canvas.drawPath(octPath, borderPaint)
+
+        // Glowing perimeter neon line
+        val neonAlpha = if (isPressed) 255 else (200 * alphaMult).toInt()
+        glowPaint.color = Color.argb(neonAlpha, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor))
+        canvas.drawPath(octPath, glowPaint)
+
+        // Text Label
+        drawCenteredText(canvas, cx, cy, r, label, alphaMult)
+    }
+
+    /**
+     * Renders a chamfered cyber polygon with red glowing accents.
+     */
+    private fun drawCyberButton(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        r: Float,
+        label: String,
+        accentColor: Int,
+        isPressed: Boolean,
+        alphaMult: Float
+    ) {
+        val cut = r * 0.35f
+        val cyberPath = Path().apply {
+            moveTo(cx - r + cut, cy - r)
+            lineTo(cx + r - cut, cy - r)
+            lineTo(cx + r, cy - r + cut)
+            lineTo(cx + r, cy + r - cut)
+            lineTo(cx + r - cut, cy + r)
+            lineTo(cx - r + cut, cy + r)
+            lineTo(cx - r, cy + r - cut)
+            lineTo(cx - r, cy - r + cut)
+            close()
+        }
+
+        val bodyAlpha = if (isPressed) (220 * alphaMult).toInt() else (150 * alphaMult).toInt()
+        val fillR = if (isPressed) Color.red(accentColor) / 2 else 22
+        val fillG = if (isPressed) Color.green(accentColor) / 2 else 24
+        val fillB = if (isPressed) Color.blue(accentColor) / 2 else 32
+        fillPaint.color = Color.argb(bodyAlpha, fillR, fillG, fillB)
+        canvas.drawPath(cyberPath, fillPaint)
+
+        // Cyber neon border
+        val neonAlpha = if (isPressed) 255 else (210 * alphaMult).toInt()
+        borderPaint.color = Color.argb(neonAlpha, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor))
+        canvas.drawPath(cyberPath, borderPaint)
+
+        // Corner tick brackets
+        val bracketLen = r * 0.30f
+        val bPaint = Paint(borderPaint).apply {
+            strokeWidth = 3f * context.resources.displayMetrics.density
+            color = Color.argb(neonAlpha, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor))
+        }
+        canvas.drawLine(cx - r, cy - r + cut, cx - r, cy - r + cut + bracketLen, bPaint)
+        canvas.drawLine(cx + r, cy - r + cut, cx + r, cy - r + cut + bracketLen, bPaint)
+        canvas.drawLine(cx - r, cy + r - cut, cx - r, cy + r - cut - bracketLen, bPaint)
+        canvas.drawLine(cx + r, cy + r - cut, cx + r, cy + r - cut - bracketLen, bPaint)
+
+        // Text Label
+        drawCenteredText(canvas, cx, cy, r, label, alphaMult)
+    }
+
+    /**
+     * Renders an elongated horizontal hex button (for START / MENU).
+     */
+    private fun drawCyberHexButton(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        r: Float,
+        label: String,
+        accentColor: Int,
+        isPressed: Boolean,
+        alphaMult: Float
+    ) {
+        val hw = r * 1.35f
+        val hh = r * 0.75f
+        val cut = hh * 0.40f
+
+        val hexPath = Path().apply {
+            moveTo(cx - hw + cut, cy - hh)
+            lineTo(cx + hw - cut, cy - hh)
+            lineTo(cx + hw, cy)
+            lineTo(cx + hw - cut, cy + hh)
+            lineTo(cx - hw + cut, cy + hh)
+            lineTo(cx - hw, cy)
+            close()
+        }
+
+        val bodyAlpha = if (isPressed) (220 * alphaMult).toInt() else (160 * alphaMult).toInt()
+        val fillR = if (isPressed) 180 else 24
+        val fillG = if (isPressed) 30 else 26
+        val fillB = if (isPressed) 35 else 34
+        fillPaint.color = Color.argb(bodyAlpha, fillR, fillG, fillB)
+        canvas.drawPath(hexPath, fillPaint)
+
+        // Neon border
+        val neonAlpha = if (isPressed) 255 else (220 * alphaMult).toInt()
+        borderPaint.color = Color.argb(neonAlpha, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor))
+        canvas.drawPath(hexPath, borderPaint)
+
+        // Text Label
+        drawCenteredText(canvas, cx, cy, r * 0.85f, label, alphaMult)
+    }
+
+    /**
+     * Draws centered high-contrast typography with drop shadow.
+     */
+    private fun drawCenteredText(canvas: Canvas, cx: Float, cy: Float, r: Float, label: String, alphaMult: Float) {
+        val textPx = when {
+            label.length > 4 -> (r * 0.45f).coerceIn(12f, 26f)
+            label.length > 2 -> (r * 0.55f).coerceIn(14f, 32f)
+            label.length > 1 -> (r * 0.65f).coerceIn(16f, 36f)
+            else -> (r * 0.75f).coerceIn(18f, 44f)
+        }
+
+        textPaint.textSize = textPx
+        textPaint.alpha = (255 * alphaMult).toInt()
+        textShadowPaint.textSize = textPx
+        textShadowPaint.alpha = (200 * alphaMult).toInt()
+
+        val fontMetrics = textPaint.fontMetrics
+        val baseline = cy - (fontMetrics.descent + fontMetrics.ascent) / 2f
+
+        // Drop shadow
+        canvas.drawText(label, cx + 1.5f, baseline + 1.5f, textShadowPaint)
+        // Foreground
+        canvas.drawText(label, cx, baseline, textPaint)
     }
 }

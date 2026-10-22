@@ -30,13 +30,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
-import com.example.ui.components.CyberCutSmall
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.settings.ControllerDataStore
+import com.example.ui.components.CyberCutSmall
 import com.example.ui.theme.*
 import com.example.utils.HideSystemBars
 import com.example.utils.LiveLogger
@@ -60,9 +61,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /**
  * Controller button data model maintaining full backwards compatibility
@@ -190,7 +189,8 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                                     scale = 0.9f,
                                     opacity = 0.8f,
                                     isEnabled = false,
-                                    isMacro = true
+                                    isMacro = true,
+                                    shape = "DEFAULT"
                                 )
                             )
                         }
@@ -211,6 +211,14 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
     ) {
         val widthPx = constraints.maxWidth.toFloat()
         val heightPx = constraints.maxHeight.toFloat()
+
+        // Canvas frame boundaries (between left & right toolbars, below topbar)
+        val density = LocalDensity.current
+        val frameInsetX = with(density) { 64.dp.toPx() }
+        val frameInsetY = with(density) { 58.dp.toPx() }
+        val frameRight = widthPx - with(density) { 68.dp.toPx() }
+        val frameBottom = heightPx - with(density) { 14.dp.toPx() }
+        val gridSpacingPx = with(density) { 32.dp.toPx() }
 
         // Initialize preset layout when measurements are available and not custom
         LaunchedEffect(selectedPreset, widthPx, heightPx) {
@@ -239,7 +247,8 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                                 scale = 0.85f,
                                 opacity = 0.8f,
                                 isEnabled = false,
-                                isMacro = true
+                                isMacro = true,
+                                shape = "DEFAULT"
                             )
                         )
                     }
@@ -259,42 +268,70 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 )
             )
 
-            // Technical Grid Lines
+            // Technical Grid Lines strictly constrained inside the editor frame
             if (isGridVisible) {
-                val gridSpacing = 28.dp.toPx()
-                val gridColor = Color(0xFF1D2230).copy(alpha = 0.45f)
-                val strokeWidth = 1f
+                clipRect(left = frameInsetX, top = frameInsetY, right = frameRight, bottom = frameBottom) {
+                    // Vertical grid lines
+                    var x = frameInsetX
+                    var colIndex = 0
+                    while (x <= frameRight) {
+                        val isMajor = (colIndex % 4 == 0)
+                        val lineColor = if (isMajor) Color(0xFF384D68).copy(alpha = 0.85f) else Color(0xFF223044).copy(alpha = 0.65f)
+                        val strokeWidth = if (isMajor) 1.5f else 1f
+                        drawLine(
+                            color = lineColor,
+                            start = Offset(x, frameInsetY),
+                            end = Offset(x, frameBottom),
+                            strokeWidth = strokeWidth
+                        )
+                        x += gridSpacingPx
+                        colIndex++
+                    }
 
-                var x = 0f
-                while (x < widthPx) {
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(x, 0f),
-                        end = Offset(x, heightPx),
-                        strokeWidth = strokeWidth
-                    )
-                    x += gridSpacing
-                }
+                    // Horizontal grid lines
+                    var y = frameInsetY
+                    var rowIndex = 0
+                    while (y <= frameBottom) {
+                        val isMajor = (rowIndex % 4 == 0)
+                        val lineColor = if (isMajor) Color(0xFF384D68).copy(alpha = 0.85f) else Color(0xFF223044).copy(alpha = 0.65f)
+                        val strokeWidth = if (isMajor) 1.5f else 1f
+                        drawLine(
+                            color = lineColor,
+                            start = Offset(frameInsetX, y),
+                            end = Offset(frameRight, y),
+                            strokeWidth = strokeWidth
+                        )
+                        y += gridSpacingPx
+                        rowIndex++
+                    }
 
-                var y = 0f
-                while (y < heightPx) {
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(0f, y),
-                        end = Offset(widthPx, y),
-                        strokeWidth = strokeWidth
-                    )
-                    y += gridSpacing
+                    // Precision intersection dots on major blueprint coordinates
+                    var ix = frameInsetX
+                    var c = 0
+                    while (ix <= frameRight) {
+                        if (c % 4 == 0) {
+                            var iy = frameInsetY
+                            var r = 0
+                            while (iy <= frameBottom) {
+                                if (r % 4 == 0) {
+                                    drawCircle(
+                                        color = Color(0xFF5B82B0).copy(alpha = 0.90f),
+                                        radius = 2.dp.toPx(),
+                                        center = Offset(ix, iy)
+                                    )
+                                }
+                                iy += gridSpacingPx
+                                r++
+                            }
+                        }
+                        ix += gridSpacingPx
+                        c++
+                    }
                 }
             }
 
             // Outer Canvas Chamfered Red Frame
-            val frameInsetX = 64.dp.toPx()
-            val frameInsetY = 60.dp.toPx()
-            val frameRight = widthPx - 68.dp.toPx()
-            val frameBottom = heightPx - 14.dp.toPx()
             val cut = 14.dp.toPx()
-
             val framePath = Path().apply {
                 moveTo(frameInsetX + cut, frameInsetY)
                 lineTo(frameRight - cut, frameInsetY)
@@ -455,16 +492,18 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
             }
         }
 
-        // --- LAYER 3: Touch Surface for Deselection (Tap Empty Space) ---
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        selectedButtonId = null
+        // --- LAYER 3: Touch Surface for Deselection (Tap Empty Space when not in preview) ---
+        if (!isPreviewMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            selectedButtonId = null
+                        }
                     }
-                }
-        )
+            )
+        }
 
         // --- LAYER 4: Interactive Controller Buttons ---
         val activeButtons = buttons.filter { it.isEnabled }
@@ -476,17 +515,24 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 isSelected = isSelected,
                 isPreviewMode = isPreviewMode,
                 isSnapToGrid = isSnapToGrid,
-                screenWidthPx = widthPx,
-                screenHeightPx = heightPx,
+                gridSpacingPx = gridSpacingPx,
+                frameInsetX = frameInsetX,
+                frameInsetY = frameInsetY,
+                frameRight = frameRight,
+                frameBottom = frameBottom,
                 onClick = {
-                    selectedButtonId = buttonState.id
+                    if (!isPreviewMode) {
+                        selectedButtonId = buttonState.id
+                    }
                 },
                 onPositionChanged = { newX, newY ->
-                    buttons = buttons.map {
-                        if (it.id == buttonState.id) it.copy(initialX = newX, initialY = newY) else it
+                    if (!isPreviewMode) {
+                        buttons = buttons.map {
+                            if (it.id == buttonState.id) it.copy(initialX = newX, initialY = newY) else it
+                        }
+                        selectedPreset = ControllerPreset.CUSTOM
+                        selectedButtonId = buttonState.id
                     }
-                    selectedPreset = ControllerPreset.CUSTOM
-                    selectedButtonId = buttonState.id
                 }
             )
         }
@@ -584,7 +630,12 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 isSnapToGrid = isSnapToGrid,
                 onSnapToggle = { isSnapToGrid = it },
                 isPreviewMode = isPreviewMode,
-                onPreviewToggle = { isPreviewMode = it }
+                onPreviewToggle = {
+                    isPreviewMode = it
+                    if (it) {
+                        selectedButtonId = null
+                    }
+                }
             )
         }
 
@@ -644,7 +695,7 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Surface(
-                    color = Color(0xFF14151C).copy(alpha = 0.9f),
+                    color = Color(0xFF14151C).copy(alpha = 0.92f),
                     shape = CyberPillCut,
                     border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFF2430)),
                     modifier = Modifier.clickable { isPreviewMode = false }
@@ -661,7 +712,7 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "معاينة شاشة اللعب (انقر للعودة إلى وضع التعديل)",
+                            text = "معاينة شاشة اللعب (انقر هنا للعودة إلى وضع التعديل)",
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -686,7 +737,7 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
             },
             text = {
                 Text(
-                    "هل أنت متأكد من رغبتك في إعادة ضبط مواضع وأحجام جميع الأزرار إلى التوزيع القياسي (6-Button)؟",
+                    "هل أنت متأكد من رغبتك في إعادة ضبط مواضع وأحجام وأشكال جميع الأزرار إلى التوزيع القياسي (6-Button)؟",
                     color = Color(0xFFC0C2D0),
                     fontSize = 13.sp
                 )
@@ -1323,10 +1374,11 @@ fun CyberFloatingAdjustmentBar(
                 EditorTool.SHAPE -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("DEFAULT" to "افتراضي", "CIRCLE" to "دائري", "OCTAGON" to "ثماني", "CYBER" to "سايبر").forEach { (shapeKey, shapeLabel) ->
-                            val isCurrent = selectedButton.shape == shapeKey
+                            val isCurrent = selectedButton.shape.uppercase() == shapeKey
                             Surface(
                                 color = if (isCurrent) Color(0xFFD50000) else Color(0xFF222430),
                                 shape = RoundedCornerShape(4.dp),
+                                border = if (isCurrent) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF3038)) else null,
                                 modifier = Modifier.clickable { onShapeChange(shapeKey) }
                             ) {
                                 Text(
@@ -1382,13 +1434,19 @@ fun ArcadeDraggableButton(
     isSelected: Boolean,
     isPreviewMode: Boolean,
     isSnapToGrid: Boolean,
-    screenWidthPx: Float,
-    screenHeightPx: Float,
+    gridSpacingPx: Float,
+    frameInsetX: Float,
+    frameInsetY: Float,
+    frameRight: Float,
+    frameBottom: Float,
     onClick: () -> Unit,
     onPositionChanged: (Float, Float) -> Unit
 ) {
+    var rawX by remember(buttonState.initialX) { mutableStateOf(buttonState.initialX) }
+    var rawY by remember(buttonState.initialY) { mutableStateOf(buttonState.initialY) }
     var offsetX by remember(buttonState.initialX) { mutableStateOf(buttonState.initialX) }
     var offsetY by remember(buttonState.initialY) { mutableStateOf(buttonState.initialY) }
+    var isPressedInPreview by remember { mutableStateOf(false) }
 
     val isDpad = buttonState.id.startsWith("dpad_")
     val isSystem = buttonState.id == "btn_start" || buttonState.id == "btn_menu"
@@ -1417,35 +1475,39 @@ fun ArcadeDraggableButton(
 
     val accentColor = getButtonAccentColor(buttonState.id)
 
-    Box(
-        modifier = Modifier
-            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-            .size(width = finalWidth, height = finalHeight)
-            .pointerInput(buttonState.id) {
+    // Touch and Gesture modifier based on Preview Mode
+    val interactionModifier = if (!isPreviewMode) {
+        Modifier
+            .pointerInput(buttonState.id, isSnapToGrid, gridSpacingPx, frameInsetX, frameInsetY, frameRight, frameBottom) {
                 detectDragGestures(
-                    onDragStart = { onClick() },
+                    onDragStart = {
+                        rawX = offsetX
+                        rawY = offsetY
+                        onClick()
+                    },
                     onDragEnd = {
-                        val gridSize = 20f
-                        val resolvedX = if (isSnapToGrid) {
-                            (offsetX / gridSize).roundToInt() * gridSize
-                        } else offsetX
-
-                        val resolvedY = if (isSnapToGrid) {
-                            (offsetY / gridSize).roundToInt() * gridSize
-                        } else offsetY
-
-                        // Clamp inside screen bounds
-                        val clampedX = resolvedX.coerceIn(10f, screenWidthPx - finalWidthPx - 10f)
-                        val clampedY = resolvedY.coerceIn(40f, screenHeightPx - finalHeightPx - 10f)
-
-                        offsetX = clampedX
-                        offsetY = clampedY
-                        onPositionChanged(clampedX, clampedY)
+                        onPositionChanged(offsetX, offsetY)
                     }
                 ) { change, dragAmount ->
                     change.consume()
-                    offsetX += dragAmount.x
-                    offsetY += dragAmount.y
+                    rawX += dragAmount.x
+                    rawY += dragAmount.y
+
+                    val maxX = (frameRight - finalWidthPx).coerceAtLeast(frameInsetX)
+                    val maxY = (frameBottom - finalHeightPx).coerceAtLeast(frameInsetY)
+
+                    val clampedRawX = rawX.coerceIn(frameInsetX, maxX)
+                    val clampedRawY = rawY.coerceIn(frameInsetY, maxY)
+
+                    if (isSnapToGrid) {
+                        val snappedX = frameInsetX + ((clampedRawX - frameInsetX) / gridSpacingPx).roundToInt() * gridSpacingPx
+                        val snappedY = frameInsetY + ((clampedRawY - frameInsetY) / gridSpacingPx).roundToInt() * gridSpacingPx
+                        offsetX = snappedX.coerceIn(frameInsetX, maxX)
+                        offsetY = snappedY.coerceIn(frameInsetY, maxY)
+                    } else {
+                        offsetX = clampedRawX
+                        offsetY = clampedRawY
+                    }
                 }
             }
             .clickable(
@@ -1453,37 +1515,81 @@ fun ArcadeDraggableButton(
                 indication = null,
                 onClick = onClick
             )
+    } else {
+        // In Preview Mode: Editing is STRICTLY disabled.
+        // Touch provides authentic visual press feedback only without modifying layout or selecting.
+        Modifier.pointerInput(buttonState.id) {
+            detectTapGestures(
+                onPress = {
+                    isPressedInPreview = true
+                    tryAwaitRelease()
+                    isPressedInPreview = false
+                }
+            )
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .size(width = finalWidth, height = finalHeight)
+            .then(interactionModifier)
             .alpha(buttonState.opacity.coerceIn(0.2f, 1.0f)),
         contentAlignment = Alignment.Center
     ) {
-        when {
-            isDpad -> {
+        // Resolve effective geometry: DEFAULT falls back to component defaults, while CIRCLE/OCTAGON/CYBER explicitly override
+        val effectiveShape = when (buttonState.shape.uppercase()) {
+            "CIRCLE" -> "CIRCLE"
+            "OCTAGON" -> "OCTAGON"
+            "CYBER" -> "CYBER"
+            "DEFAULT" -> when {
+                isDpad -> "OCTAGON"
+                isSystem -> "CYBER_HEX"
+                isMacro -> "CYBER"
+                else -> "ARCADE"
+            }
+            else -> "ARCADE"
+        }
+
+        when (effectiveShape) {
+            "OCTAGON" -> {
                 DpadOctagonButton(
                     direction = buttonState.label,
-                    accentColor = Color(0xFFFF2028)
+                    accentColor = accentColor,
+                    isPressed = isPressedInPreview
                 )
             }
-            isSystem -> {
+            "CYBER" -> {
+                CyberChamferButton(
+                    label = buttonState.label,
+                    accentColor = accentColor,
+                    isPressed = isPressedInPreview
+                )
+            }
+            "CYBER_HEX" -> {
                 SystemHexButton(
                     label = buttonState.label,
-                    subIcon = if (buttonState.id == "btn_start") "[-]" else "[≡]"
+                    subIcon = if (buttonState.id == "btn_start") "[-]" else "[≡]",
+                    isPressed = isPressedInPreview
                 )
             }
-            isMacro -> {
-                MacroHexButton(
+            "CIRCLE" -> {
+                CircularButtonContent(
                     label = buttonState.label,
-                    accentColor = Color(0xFFFF9100)
+                    accentColor = accentColor,
+                    isPressed = isPressedInPreview
                 )
             }
             else -> {
                 ArcadeConvexButton(
                     label = buttonState.label,
-                    accentColor = accentColor
+                    accentColor = accentColor,
+                    isPressed = isPressedInPreview
                 )
             }
         }
 
-        // Selection Reticle with Corner L-Brackets
+        // Selection Reticle with Corner L-Brackets (Hidden during Preview)
         if (isSelected && !isPreviewMode) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokeWidth = 2.dp.toPx()
@@ -1526,7 +1632,8 @@ fun ArcadeDraggableButton(
 @Composable
 fun ArcadeConvexButton(
     label: String,
-    accentColor: Color
+    accentColor: Color,
+    isPressed: Boolean = false
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
@@ -1555,14 +1662,15 @@ fun ArcadeConvexButton(
 
         // 2. Glowing Colored Neon Perimeter Ring
         val neonRadius = r * 0.88f
+        val neonAlpha = if (isPressed) 0.85f else 0.35f
         drawCircle(
-            color = accentColor.copy(alpha = 0.35f),
+            color = accentColor.copy(alpha = neonAlpha),
             radius = neonRadius + 2.dp.toPx(),
             center = center,
             style = Stroke(width = 4.dp.toPx())
         )
         drawCircle(
-            color = accentColor,
+            color = if (isPressed) Color.White else accentColor,
             radius = neonRadius,
             center = center,
             style = Stroke(width = 2.5.dp.toPx())
@@ -1570,10 +1678,11 @@ fun ArcadeConvexButton(
 
         // 3. Spherical Translucent Concave Colored Dish
         val innerRadius = r * 0.78f
+        val centerAlpha = if (isPressed) 1.0f else 0.90f
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    accentColor.copy(alpha = 0.90f),
+                    accentColor.copy(alpha = centerAlpha),
                     accentColor.copy(alpha = 0.50f),
                     Color(0xFF0D0E14)
                 ),
@@ -1599,7 +1708,6 @@ fun ArcadeConvexButton(
 
     // Centered Crisp White Bold Label with Drop Shadow
     Box(contentAlignment = Alignment.Center) {
-        // Drop shadow label
         Text(
             text = label,
             color = Color.Black.copy(alpha = 0.85f),
@@ -1608,7 +1716,6 @@ fun ArcadeConvexButton(
             fontFamily = FontFamily.SansSerif,
             modifier = Modifier.offset(x = 1.dp, y = 1.dp)
         )
-        // Foreground white label
         Text(
             text = label,
             color = Color.White,
@@ -1620,20 +1727,64 @@ fun ArcadeConvexButton(
 }
 
 // ============================================================================
-// 3D FACETED OCTAGON BUTTON (D-PAD)
+// CIRCULAR BUTTON CONTENT (SHAPE = CIRCLE)
+// ============================================================================
+
+@Composable
+fun CircularButtonContent(
+    label: String,
+    accentColor: Color,
+    isPressed: Boolean = false
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val r = (w.coerceAtMost(h) / 2f) - 2f
+        val center = Offset(w / 2f, h / 2f)
+
+        // Circular Body
+        val bodyColor = if (isPressed) accentColor.copy(alpha = 0.85f) else Color(0xFF181A24)
+        drawCircle(color = bodyColor, radius = r, center = center)
+
+        // Colored Neon Halo Ring
+        val ringColor = if (isPressed) Color.White else accentColor
+        drawCircle(color = ringColor, radius = r, center = center, style = Stroke(width = 2.5.dp.toPx()))
+    }
+
+    Box(contentAlignment = Alignment.Center) {
+        Text(
+            text = label,
+            color = Color.Black.copy(alpha = 0.85f),
+            fontWeight = FontWeight.Black,
+            fontSize = 20.sp,
+            fontFamily = FontFamily.SansSerif,
+            modifier = Modifier.offset(x = 1.dp, y = 1.dp)
+        )
+        Text(
+            text = label,
+            color = Color.White,
+            fontWeight = FontWeight.Black,
+            fontSize = 20.sp,
+            fontFamily = FontFamily.SansSerif
+        )
+    }
+}
+
+// ============================================================================
+// 3D FACETED OCTAGON BUTTON (D-PAD & SHAPE = OCTAGON)
 // ============================================================================
 
 @Composable
 fun DpadOctagonButton(
     direction: String,
-    accentColor: Color
+    accentColor: Color,
+    isPressed: Boolean = false
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
         val cut = w * 0.28f
 
-        // Octagon Path
         val octPath = Path().apply {
             moveTo(cut, 0f)
             lineTo(w - cut, 0f)
@@ -1646,12 +1797,15 @@ fun DpadOctagonButton(
             close()
         }
 
-        // Base Dark Graphite Fill
+        // Base Dark Graphite Fill or Pressed Glow
+        val fillColors = if (isPressed) {
+            listOf(accentColor.copy(alpha = 0.85f), Color(0xFF282A36))
+        } else {
+            listOf(Color(0xFF282A36), Color(0xFF16171E), Color(0xFF0F1015))
+        }
         drawPath(
             path = octPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF282A36), Color(0xFF16171E), Color(0xFF0F1015))
-            )
+            brush = Brush.verticalGradient(colors = fillColors)
         )
 
         // Outer Beveled Chamfer Highlight
@@ -1661,20 +1815,76 @@ fun DpadOctagonButton(
             style = Stroke(width = 1.5.dp.toPx())
         )
 
-        // Crimson Glowing Perimeter Accent on Outer Edge
+        // Glowing Perimeter Accent
+        val rimColor = if (isPressed) Color.White else accentColor.copy(alpha = 0.85f)
         drawPath(
             path = octPath,
-            color = accentColor.copy(alpha = 0.85f),
+            color = rimColor,
             style = Stroke(width = 2.dp.toPx())
         )
     }
 
-    // Bold White Directional Arrow
     Text(
         text = direction,
         color = Color.White,
         fontWeight = FontWeight.Black,
-        fontSize = 22.sp
+        fontSize = if (direction.length > 2) 13.sp else 22.sp
+    )
+}
+
+// ============================================================================
+// CYBER CHAMFERED BUTTON (SHAPE = CYBER)
+// ============================================================================
+
+@Composable
+fun CyberChamferButton(
+    label: String,
+    accentColor: Color,
+    isPressed: Boolean = false
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val cut = 12.dp.toPx()
+
+        val path = Path().apply {
+            moveTo(cut, 0f)
+            lineTo(w - cut, 0f)
+            lineTo(w, cut)
+            lineTo(w, h - cut)
+            lineTo(w - cut, h)
+            lineTo(cut, h)
+            lineTo(0f, h - cut)
+            lineTo(0f, cut)
+            close()
+        }
+
+        val fillColors = if (isPressed) {
+            listOf(accentColor.copy(alpha = 0.85f), Color(0xFF1E140C))
+        } else {
+            listOf(Color(0xFF241618), Color(0xFF140E10), Color(0xFF0C090A))
+        }
+
+        drawPath(path = path, brush = Brush.verticalGradient(fillColors))
+
+        // Cyber neon border
+        val rimColor = if (isPressed) Color.White else accentColor
+        drawPath(path = path, color = rimColor, style = Stroke(width = 2.dp.toPx()))
+
+        // Corner tick brackets
+        val bracketLen = 8.dp.toPx()
+        val bStroke = 2.dp.toPx()
+        drawLine(rimColor, Offset(0f, cut), Offset(0f, cut + bracketLen), strokeWidth = bStroke)
+        drawLine(rimColor, Offset(w, cut), Offset(w, cut + bracketLen), strokeWidth = bStroke)
+        drawLine(rimColor, Offset(0f, h - cut), Offset(0f, h - cut - bracketLen), strokeWidth = bStroke)
+        drawLine(rimColor, Offset(w, h - cut), Offset(w, h - cut - bracketLen), strokeWidth = bStroke)
+    }
+
+    Text(
+        text = label,
+        color = Color.White,
+        fontWeight = FontWeight.Black,
+        fontSize = if (label.length > 3) 10.sp else if (label.length > 1) 13.sp else 18.sp
     )
 }
 
@@ -1685,14 +1895,14 @@ fun DpadOctagonButton(
 @Composable
 fun SystemHexButton(
     label: String,
-    subIcon: String
+    subIcon: String,
+    isPressed: Boolean = false
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
         val cutX = 14.dp.toPx()
 
-        // Elongated Hexagon Path
         val hexPath = Path().apply {
             moveTo(cutX, 0f)
             lineTo(w - cutX, 0f)
@@ -1703,22 +1913,17 @@ fun SystemHexButton(
             close()
         }
 
-        // Metallic Graphite Fill
-        drawPath(
-            path = hexPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF2E313E), Color(0xFF181A22), Color(0xFF0F1016))
-            )
-        )
+        val fillColors = if (isPressed) {
+            listOf(Color(0xFFD50000), Color(0xFF8A0E13))
+        } else {
+            listOf(Color(0xFF2E313E), Color(0xFF181A22), Color(0xFF0F1016))
+        }
 
-        // Neon Red Outer Border
-        drawPath(
-            path = hexPath,
-            color = Color(0xFFFF2028),
-            style = Stroke(width = 2.dp.toPx())
-        )
+        drawPath(path = hexPath, brush = Brush.verticalGradient(fillColors))
 
-        // Subtle specular top line
+        val rimColor = if (isPressed) Color.White else Color(0xFFFF2028)
+        drawPath(path = hexPath, color = rimColor, style = Stroke(width = 2.dp.toPx()))
+
         drawLine(
             color = Color.White.copy(alpha = 0.35f),
             start = Offset(cutX, 2f),
@@ -1743,65 +1948,6 @@ fun SystemHexButton(
             color = Color(0xFFFF3038),
             fontWeight = FontWeight.Bold,
             fontSize = 9.sp
-        )
-    }
-}
-
-// ============================================================================
-// MACRO CYBER BUTTON (AMBER / GOLD GLOW)
-// ============================================================================
-
-@Composable
-fun MacroHexButton(
-    label: String,
-    accentColor: Color
-) {
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val w = size.width
-        val h = size.height
-        val cut = 10.dp.toPx()
-
-        val path = Path().apply {
-            moveTo(cut, 0f)
-            lineTo(w - cut, 0f)
-            lineTo(w, cut)
-            lineTo(w, h - cut)
-            lineTo(w - cut, h)
-            lineTo(cut, h)
-            lineTo(0f, h - cut)
-            lineTo(0f, cut)
-            close()
-        }
-
-        drawPath(
-            path = path,
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF382312), Color(0xFF1E140C), Color(0xFF100A06))
-            )
-        )
-
-        drawPath(
-            path = path,
-            color = accentColor,
-            style = Stroke(width = 2.dp.toPx())
-        )
-    }
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            Icons.Default.Bolt,
-            contentDescription = null,
-            tint = accentColor,
-            modifier = Modifier.size(14.dp)
-        )
-        Text(
-            text = label,
-            color = Color.White,
-            fontWeight = FontWeight.Black,
-            fontSize = if (label.length > 3) 10.sp else 12.sp
         )
     }
 }
