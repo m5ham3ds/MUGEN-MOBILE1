@@ -141,9 +141,29 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
     var isGridVisible by remember { mutableStateOf(true) }
     var isSnapToGrid by remember { mutableStateOf(true) }
     var isPreviewMode by remember { mutableStateOf(false) }
+    var isDpadGrouped by remember { mutableStateOf(true) }
 
-    // Load saved layout on initial entry
+    // Independent Sidebar Reorder States
+    var leftToolOrder by remember { mutableStateOf(ControllerDataStore.DEFAULT_LEFT_TOOLS) }
+    var rightToolOrder by remember { mutableStateOf(ControllerDataStore.DEFAULT_RIGHT_TOOLS) }
+    var isLeftReorderMode by remember { mutableStateOf(false) }
+    var isRightReorderMode by remember { mutableStateOf(false) }
+
+    // Load saved layout and preferences on initial entry
     LaunchedEffect(Unit) {
+        val groupedPref = ControllerDataStore.isDpadGrouped(context).firstOrNull() ?: true
+        isDpadGrouped = groupedPref
+
+        val savedLeftOrder = ControllerDataStore.getLeftToolbarOrder(context).firstOrNull()
+        if (!savedLeftOrder.isNullOrEmpty()) {
+            leftToolOrder = savedLeftOrder
+        }
+
+        val savedRightOrder = ControllerDataStore.getRightToolbarOrder(context).firstOrNull()
+        if (!savedRightOrder.isNullOrEmpty()) {
+            rightToolOrder = savedRightOrder
+        }
+
         val savedLayout = ControllerDataStore.getLayout(context).firstOrNull()
         if (!savedLayout.isNullOrEmpty()) {
             try {
@@ -211,12 +231,19 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
     ) {
         val widthPx = constraints.maxWidth.toFloat()
         val heightPx = constraints.maxHeight.toFloat()
+        val screenWidthDp = maxWidth
+        val screenHeightDp = maxHeight
 
-        // Canvas frame boundaries (between left & right toolbars, below topbar)
+        // Derive synchronized and identical sidebar dimensions from unified constraints
+        val sidebarWidth = ControllerSidebarGeometry.calculateSidebarWidth(screenWidthDp.value).dp
+        val sidebarHeight = ControllerSidebarGeometry.calculateSidebarHeight(screenHeightDp.value).dp
+
+        // Canvas frame boundaries strictly and symmetrically centered between toolbars
         val density = LocalDensity.current
-        val frameInsetX = with(density) { 64.dp.toPx() }
-        val frameInsetY = with(density) { 58.dp.toPx() }
-        val frameRight = widthPx - with(density) { 68.dp.toPx() }
+        val sidebarMarginPx = with(density) { (sidebarWidth + 14.dp).toPx() }
+        val frameInsetX = sidebarMarginPx
+        val frameInsetY = with(density) { 56.dp.toPx() }
+        val frameRight = widthPx - sidebarMarginPx
         val frameBottom = heightPx - with(density) { 14.dp.toPx() }
         val gridSpacingPx = with(density) { 32.dp.toPx() }
 
@@ -521,6 +548,7 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 isSelected = isSelected,
                 isPreviewMode = isPreviewMode,
                 isSnapToGrid = isSnapToGrid,
+                isDpadGrouped = isDpadGrouped,
                 gridSpacingPx = gridSpacingPx,
                 frameInsetX = frameInsetX,
                 frameInsetY = frameInsetY,
@@ -531,10 +559,60 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                         selectedButtonId = buttonState.id
                     }
                 },
+                onDragDelta = { dx, dy ->
+                    if (!isPreviewMode && isDpadGrouped && DpadGroupingLogic.isDpadButton(buttonState.id)) {
+                        val (baseW, baseH) = ControllerVisualSpecs.getBaseDimensionsDp(buttonState.id, buttonState.isMacro)
+                        val btnWPx = with(density) { baseW.dp.toPx() }
+                        val btnHPx = with(density) { baseH.dp.toPx() }
+                        buttons = DpadGroupingLogic.applyDpadGroupDrag(
+                            buttons = buttons,
+                            draggedId = buttonState.id,
+                            deltaX = dx,
+                            deltaY = dy,
+                            buttonWidthPx = btnWPx,
+                            buttonHeightPx = btnHPx,
+                            frameInsetX = frameInsetX,
+                            frameInsetY = frameInsetY,
+                            frameRight = frameRight,
+                            frameBottom = frameBottom
+                        )
+                        selectedPreset = ControllerPreset.CUSTOM
+                        selectedButtonId = buttonState.id
+                    }
+                },
                 onPositionChanged = { newX, newY ->
                     if (!isPreviewMode) {
-                        buttons = buttons.map {
-                            if (it.id == buttonState.id) it.copy(initialX = newX, initialY = newY) else it
+                        if (isDpadGrouped && DpadGroupingLogic.isDpadButton(buttonState.id)) {
+                            // On drag end when grouped, snap group to grid if snap is enabled
+                            if (isSnapToGrid) {
+                                val (baseW, baseH) = ControllerVisualSpecs.getBaseDimensionsDp(buttonState.id, buttonState.isMacro)
+                                val btnWPx = with(density) { baseW.dp.toPx() }
+                                val btnHPx = with(density) { baseH.dp.toPx() }
+                                val curX = buttonState.initialX
+                                val curY = buttonState.initialY
+                                val snappedX = frameInsetX + ((curX - frameInsetX) / gridSpacingPx).roundToInt() * gridSpacingPx
+                                val snappedY = frameInsetY + ((curY - frameInsetY) / gridSpacingPx).roundToInt() * gridSpacingPx
+                                val deltaSnapX = snappedX - curX
+                                val deltaSnapY = snappedY - curY
+                                if (deltaSnapX != 0f || deltaSnapY != 0f) {
+                                    buttons = DpadGroupingLogic.applyDpadGroupDrag(
+                                        buttons = buttons,
+                                        draggedId = buttonState.id,
+                                        deltaX = deltaSnapX,
+                                        deltaY = deltaSnapY,
+                                        buttonWidthPx = btnWPx,
+                                        buttonHeightPx = btnHPx,
+                                        frameInsetX = frameInsetX,
+                                        frameInsetY = frameInsetY,
+                                        frameRight = frameRight,
+                                        frameBottom = frameBottom
+                                    )
+                                }
+                            }
+                        } else {
+                            buttons = buttons.map {
+                                if (it.id == buttonState.id) it.copy(initialX = newX, initialY = newY) else it
+                            }
                         }
                         selectedPreset = ControllerPreset.CUSTOM
                         selectedButtonId = buttonState.id
@@ -558,20 +636,48 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                     selectedButton = selectedButton,
                     activeTool = activeTool,
                     onScaleChange = { newScale ->
-                        buttons = buttons.map {
-                            if (it.id == selectedButton.id) it.copy(scale = newScale) else it
+                        if (isDpadGrouped && DpadGroupingLogic.isDpadButton(selectedButton.id)) {
+                            val (baseW, baseH) = ControllerVisualSpecs.getBaseDimensionsDp(selectedButton.id, selectedButton.isMacro)
+                            val btnWPx = with(density) { baseW.dp.toPx() }
+                            val btnHPx = with(density) { baseH.dp.toPx() }
+                            buttons = DpadGroupingLogic.applyDpadGroupScale(
+                                buttons = buttons,
+                                newScale = newScale,
+                                buttonWidthPx = btnWPx,
+                                buttonHeightPx = btnHPx,
+                                frameInsetX = frameInsetX,
+                                frameInsetY = frameInsetY,
+                                frameRight = frameRight,
+                                frameBottom = frameBottom
+                            )
+                        } else {
+                            buttons = buttons.map {
+                                if (it.id == selectedButton.id) it.copy(scale = newScale) else it
+                            }
                         }
                         selectedPreset = ControllerPreset.CUSTOM
                     },
                     onOpacityChange = { newOpacity ->
-                        buttons = buttons.map {
-                            if (it.id == selectedButton.id) it.copy(opacity = newOpacity) else it
+                        if (isDpadGrouped && DpadGroupingLogic.isDpadButton(selectedButton.id)) {
+                            buttons = buttons.map {
+                                if (DpadGroupingLogic.isDpadButton(it.id)) it.copy(opacity = newOpacity) else it
+                            }
+                        } else {
+                            buttons = buttons.map {
+                                if (it.id == selectedButton.id) it.copy(opacity = newOpacity) else it
+                            }
                         }
                         selectedPreset = ControllerPreset.CUSTOM
                     },
                     onShapeChange = { newShape ->
-                        buttons = buttons.map {
-                            if (it.id == selectedButton.id) it.copy(shape = newShape) else it
+                        if (isDpadGrouped && DpadGroupingLogic.isDpadButton(selectedButton.id)) {
+                            buttons = buttons.map {
+                                if (DpadGroupingLogic.isDpadButton(it.id)) it.copy(shape = newShape) else it
+                            }
+                        } else {
+                            buttons = buttons.map {
+                                if (it.id == selectedButton.id) it.copy(shape = newShape) else it
+                            }
                         }
                         selectedPreset = ControllerPreset.CUSTOM
                     },
@@ -600,10 +706,22 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 10.dp)
+                .padding(start = 8.dp)
         ) {
             CyberLeftToolbar(
+                sidebarWidth = sidebarWidth,
+                sidebarHeight = sidebarHeight,
                 activeTool = activeTool,
+                toolOrder = leftToolOrder,
+                isReorderMode = isLeftReorderMode,
+                onToggleReorderMode = { isLeftReorderMode = !isLeftReorderMode },
+                onReorderTool = { toolId, direction ->
+                    val newOrder = ToolbarReorderManager.reorderTool(leftToolOrder, toolId, direction)
+                    leftToolOrder = newOrder
+                    coroutineScope.launch {
+                        ControllerDataStore.saveLeftToolbarOrder(context, newOrder)
+                    }
+                },
                 onToolSelect = { tool ->
                     activeTool = tool
                     if (tool == EditorTool.DELETE && selectedButton != null) {
@@ -621,16 +739,18 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
             )
         }
 
-        // --- LAYER 7: Right Vertical Toolbar (3 Controls: Grid, Snap, Preview) ---
+        // --- LAYER 7: Right Vertical Toolbar (4 Controls: Grid, Snap, Preview, D-Pad Grouping) ---
         AnimatedVisibility(
             visible = !isPreviewMode,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 10.dp)
+                .padding(end = 8.dp)
         ) {
             CyberRightToolbar(
+                sidebarWidth = sidebarWidth,
+                sidebarHeight = sidebarHeight,
                 isGridVisible = isGridVisible,
                 onGridToggle = { isGridVisible = it },
                 isSnapToGrid = isSnapToGrid,
@@ -640,6 +760,28 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                     isPreviewMode = it
                     if (it) {
                         selectedButtonId = null
+                    }
+                },
+                isDpadGrouped = isDpadGrouped,
+                onDpadGroupToggle = {
+                    isDpadGrouped = it
+                    coroutineScope.launch {
+                        ControllerDataStore.saveDpadGrouped(context, it)
+                    }
+                    Toast.makeText(
+                        context,
+                        if (it) "تم تفعيل ربط أسهم الاتجاهات (تحريك متزامن)" else "تم فك ربط أسهم الاتجاهات (تحريك مستقل)",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
+                toolOrder = rightToolOrder,
+                isReorderMode = isRightReorderMode,
+                onToggleReorderMode = { isRightReorderMode = !isRightReorderMode },
+                onReorderTool = { toolId, direction ->
+                    val newOrder = ToolbarReorderManager.reorderTool(rightToolOrder, toolId, direction)
+                    rightToolOrder = newOrder
+                    coroutineScope.launch {
+                        ControllerDataStore.saveRightToolbarOrder(context, newOrder)
                     }
                 }
             )
@@ -680,10 +822,13 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                             jsonArray.put(obj)
                         }
                         ControllerDataStore.saveLayout(context, jsonArray.toString())
+                        ControllerDataStore.saveDpadGrouped(context, isDpadGrouped)
+                        ControllerDataStore.saveLeftToolbarOrder(context, leftToolOrder)
+                        ControllerDataStore.saveRightToolbarOrder(context, rightToolOrder)
                         LiveLogger.i(
                             LiveLogger.Category.CONTROLLER,
                             "LAYOUT_SAVED",
-                            "Saved ${buttons.size} buttons (Active=${buttons.count { it.isEnabled }})"
+                            "Saved ${buttons.size} buttons (Active=${buttons.count { it.isEnabled }}), DpadGrouped=$isDpadGrouped"
                         )
                         Toast.makeText(context, "تم حفظ تخطيط أزرار التحكم بنجاح!", Toast.LENGTH_SHORT).show()
                     }
@@ -1134,53 +1279,169 @@ fun CyberTopBar(
 
 @Composable
 fun CyberLeftToolbar(
+    sidebarWidth: Dp,
+    sidebarHeight: Dp,
     activeTool: EditorTool,
+    toolOrder: List<String>,
+    isReorderMode: Boolean,
+    onToggleReorderMode: () -> Unit,
+    onReorderTool: (String, Int) -> Unit,
     onToolSelect: (EditorTool) -> Unit
 ) {
     Surface(
         color = Color(0xFF0F1016).copy(alpha = 0.95f),
         shape = CyberSidePanelShape,
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF551216)),
-        modifier = Modifier.wrapContentSize()
+        modifier = Modifier.size(width = sidebarWidth, height = sidebarHeight)
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 4.dp, horizontal = 3.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            EditorTool.values().forEach { tool ->
-                val isActive = tool == activeTool
-
-                val bgColor = if (isActive) Color(0xFFD50000) else Color(0xFF171922)
-                val borderColor = if (isActive) Color(0xFFFF3038) else Color(0xFF2C2F3C)
-                val contentColor = if (isActive) Color.White else Color(0xFFB0B3C2)
-
-                Surface(
-                    color = bgColor,
-                    shape = CyberButtonCut,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
-                    modifier = Modifier
-                        .size(width = 44.dp, height = 48.dp)
-                        .clickable { onToolSelect(tool) }
+            // Symmetrical Mini Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isReorderMode) "ترتيب" else "أدوات",
+                    color = if (isReorderMode) Color(0xFFFF3038) else Color(0xFF888B98),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(
+                    onClick = onToggleReorderMode,
+                    modifier = Modifier.size(18.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = tool.icon,
-                            contentDescription = tool.title,
-                            tint = contentColor,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = tool.title,
-                            color = contentColor,
-                            fontSize = 10.sp,
-                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
-                        )
+                    Icon(
+                        imageVector = if (isReorderMode) Icons.Default.Check else Icons.Default.Tune,
+                        contentDescription = "ترتيب الأدوات",
+                        tint = if (isReorderMode) Color(0xFF4CAF50) else Color(0xFF888B98),
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color(0xFF331418))
+            )
+
+            // Evenly Distributed Tool Items
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 2.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceEvenly
+            ) {
+                toolOrder.forEachIndexed { index, toolId ->
+                    val tool = when (toolId) {
+                        "SIZE" -> EditorTool.SIZE
+                        "SHAPE" -> EditorTool.SHAPE
+                        "OPACITY" -> EditorTool.OPACITY
+                        "DELETE" -> EditorTool.DELETE
+                        else -> EditorTool.MOVE
+                    }
+
+                    if (isReorderMode) {
+                        Surface(
+                            color = Color(0xFF161822),
+                            shape = CyberButtonCut,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3D4155)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = tool.icon,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = tool.title,
+                                    color = Color.White,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Column(verticalArrangement = Arrangement.Center) {
+                                    if (index > 0) {
+                                        Icon(
+                                            Icons.Default.ArrowDropUp,
+                                            contentDescription = "أعلى",
+                                            tint = Color(0xFFFF3038),
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable { onReorderTool(toolId, -1) }
+                                        )
+                                    }
+                                    if (index < toolOrder.size - 1) {
+                                        Icon(
+                                            Icons.Default.ArrowDropDown,
+                                            contentDescription = "أسفل",
+                                            tint = Color(0xFFFF3038),
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable { onReorderTool(toolId, 1) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        val isActive = tool == activeTool
+                        val bgColor = if (isActive) Color(0xFFD50000) else Color(0xFF171922)
+                        val borderColor = if (isActive) Color(0xFFFF3038) else Color(0xFF2C2F3C)
+                        val contentColor = if (isActive) Color.White else Color(0xFFB0B3C2)
+
+                        Surface(
+                            color = bgColor,
+                            shape = CyberButtonCut,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .pointerInput(tool) {
+                                    detectTapGestures(
+                                        onTap = { onToolSelect(tool) },
+                                        onLongPress = { onToggleReorderMode() }
+                                    )
+                                }
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = tool.icon,
+                                    contentDescription = tool.title,
+                                    tint = contentColor,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = tool.title,
+                                    color = contentColor,
+                                    fontSize = 9.sp,
+                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1189,117 +1450,306 @@ fun CyberLeftToolbar(
 }
 
 // ============================================================================
-// RIGHT VERTICAL TOOLBAR (3 TOGGLE CONTROLS)
+// RIGHT VERTICAL TOOLBAR (4 TOGGLE CONTROLS)
 // ============================================================================
 
 @Composable
 fun CyberRightToolbar(
+    sidebarWidth: Dp,
+    sidebarHeight: Dp,
     isGridVisible: Boolean,
     onGridToggle: (Boolean) -> Unit,
     isSnapToGrid: Boolean,
     onSnapToggle: (Boolean) -> Unit,
     isPreviewMode: Boolean,
-    onPreviewToggle: (Boolean) -> Unit
+    onPreviewToggle: (Boolean) -> Unit,
+    isDpadGrouped: Boolean,
+    onDpadGroupToggle: (Boolean) -> Unit,
+    toolOrder: List<String>,
+    isReorderMode: Boolean,
+    onToggleReorderMode: () -> Unit,
+    onReorderTool: (String, Int) -> Unit
 ) {
     Surface(
         color = Color(0xFF0F1016).copy(alpha = 0.95f),
         shape = CyberSidePanelShape,
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF551216)),
-        modifier = Modifier.wrapContentSize()
+        modifier = Modifier.size(width = sidebarWidth, height = sidebarHeight)
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 4.dp, horizontal = 3.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 1. Grid Toggle
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.GridOn,
-                    contentDescription = null,
-                    tint = if (isGridVisible) Color.White else Color(0xFF888B98),
-                    modifier = Modifier.size(18.dp)
-                )
+            // Symmetrical Mini Header matching Left Toolbar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "شبكة",
-                    color = if (isGridVisible) Color.White else Color(0xFF888B98),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
+                    text = if (isReorderMode) "ترتيب" else "تحكم",
+                    color = if (isReorderMode) Color(0xFFFF3038) else Color(0xFF888B98),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
                 )
-                Switch(
-                    checked = isGridVisible,
-                    onCheckedChange = onGridToggle,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFFD50000),
-                        checkedBorderColor = Color(0xFFFF2430),
-                        uncheckedThumbColor = Color(0xFFB0B3C1),
-                        uncheckedTrackColor = Color(0xFF1E2028),
-                        uncheckedBorderColor = Color(0xFF353844)
-                    ),
-                    modifier = Modifier.scale(0.70f)
-                )
+                IconButton(
+                    onClick = onToggleReorderMode,
+                    modifier = Modifier.size(18.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isReorderMode) Icons.Default.Check else Icons.Default.Tune,
+                        contentDescription = "ترتيب الأدوات",
+                        tint = if (isReorderMode) Color(0xFF4CAF50) else Color(0xFF888B98),
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
             }
 
-            // 2. Snap Toggle
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.Grain,
-                    contentDescription = null,
-                    tint = if (isSnapToGrid) Color.White else Color(0xFF888B98),
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    text = "محاذاة",
-                    color = if (isSnapToGrid) Color.White else Color(0xFF888B98),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
-                )
-                Switch(
-                    checked = isSnapToGrid,
-                    onCheckedChange = onSnapToggle,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFFD50000),
-                        checkedBorderColor = Color(0xFFFF2430),
-                        uncheckedThumbColor = Color(0xFFB0B3C1),
-                        uncheckedTrackColor = Color(0xFF1E2028),
-                        uncheckedBorderColor = Color(0xFF353844)
-                    ),
-                    modifier = Modifier.scale(0.70f)
-                )
-            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color(0xFF331418))
+            )
 
-            // 3. Preview Toggle
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.Visibility,
-                    contentDescription = null,
-                    tint = if (isPreviewMode) Color(0xFFFF3038) else Color(0xFF888B98),
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    text = "معاينة",
-                    color = if (isPreviewMode) Color(0xFFFF3038) else Color(0xFF888B98),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
-                )
-                Switch(
-                    checked = isPreviewMode,
-                    onCheckedChange = onPreviewToggle,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFFD50000),
-                        checkedBorderColor = Color(0xFFFF2430),
-                        uncheckedThumbColor = Color(0xFFB0B3C1),
-                        uncheckedTrackColor = Color(0xFF1E2028),
-                        uncheckedBorderColor = Color(0xFF353844)
-                    ),
-                    modifier = Modifier.scale(0.70f)
-                )
+            // Evenly Distributed Tool Items (4 tools: Grid, Snap, Preview, D-pad Grouping)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 2.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceEvenly
+            ) {
+                toolOrder.forEachIndexed { index, toolId ->
+                    if (isReorderMode) {
+                        val (reorderIcon, reorderTitle) = when (toolId) {
+                            "GRID" -> Pair(Icons.Default.GridOn, "شبكة")
+                            "SNAP" -> Pair(Icons.Default.Grain, "محاذاة")
+                            "PREVIEW" -> Pair(Icons.Default.Visibility, "معاينة")
+                            else -> Pair(if (isDpadGrouped) Icons.Default.Link else Icons.Default.LinkOff, "ربط")
+                        }
+
+                        Surface(
+                            color = Color(0xFF161822),
+                            shape = CyberButtonCut,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3D4155)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = reorderIcon,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = reorderTitle,
+                                    color = Color.White,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Column(verticalArrangement = Arrangement.Center) {
+                                    if (index > 0) {
+                                        Icon(
+                                            Icons.Default.ArrowDropUp,
+                                            contentDescription = "أعلى",
+                                            tint = Color(0xFFFF3038),
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable { onReorderTool(toolId, -1) }
+                                        )
+                                    }
+                                    if (index < toolOrder.size - 1) {
+                                        Icon(
+                                            Icons.Default.ArrowDropDown,
+                                            contentDescription = "أسفل",
+                                            tint = Color(0xFFFF3038),
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable { onReorderTool(toolId, 1) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Standard Mode
+                        when (toolId) {
+                            "GRID" -> {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(
+                                                onTap = { onGridToggle(!isGridVisible) },
+                                                onLongPress = { onToggleReorderMode() }
+                                            )
+                                        }
+                                ) {
+                                    Icon(
+                                        Icons.Default.GridOn,
+                                        contentDescription = null,
+                                        tint = if (isGridVisible) Color.White else Color(0xFF888B98),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "شبكة",
+                                        color = if (isGridVisible) Color.White else Color(0xFF888B98),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Switch(
+                                        checked = isGridVisible,
+                                        onCheckedChange = onGridToggle,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = Color(0xFFD50000),
+                                            checkedBorderColor = Color(0xFFFF2430),
+                                            uncheckedThumbColor = Color(0xFFB0B3C1),
+                                            uncheckedTrackColor = Color(0xFF1E2028),
+                                            uncheckedBorderColor = Color(0xFF353844)
+                                        ),
+                                        modifier = Modifier.scale(0.60f).height(20.dp)
+                                    )
+                                }
+                            }
+
+                            "SNAP" -> {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(
+                                                onTap = { onSnapToggle(!isSnapToGrid) },
+                                                onLongPress = { onToggleReorderMode() }
+                                            )
+                                        }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Grain,
+                                        contentDescription = null,
+                                        tint = if (isSnapToGrid) Color.White else Color(0xFF888B98),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "محاذاة",
+                                        color = if (isSnapToGrid) Color.White else Color(0xFF888B98),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Switch(
+                                        checked = isSnapToGrid,
+                                        onCheckedChange = onSnapToggle,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = Color(0xFFD50000),
+                                            checkedBorderColor = Color(0xFFFF2430),
+                                            uncheckedThumbColor = Color(0xFFB0B3C1),
+                                            uncheckedTrackColor = Color(0xFF1E2028),
+                                            uncheckedBorderColor = Color(0xFF353844)
+                                        ),
+                                        modifier = Modifier.scale(0.60f).height(20.dp)
+                                    )
+                                }
+                            }
+
+                            "PREVIEW" -> {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(
+                                                onTap = { onPreviewToggle(!isPreviewMode) },
+                                                onLongPress = { onToggleReorderMode() }
+                                            )
+                                        }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        tint = if (isPreviewMode) Color(0xFFFF3038) else Color(0xFF888B98),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "معاينة",
+                                        color = if (isPreviewMode) Color(0xFFFF3038) else Color(0xFF888B98),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Switch(
+                                        checked = isPreviewMode,
+                                        onCheckedChange = onPreviewToggle,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = Color(0xFFD50000),
+                                            checkedBorderColor = Color(0xFFFF2430),
+                                            uncheckedThumbColor = Color(0xFFB0B3C1),
+                                            uncheckedTrackColor = Color(0xFF1E2028),
+                                            uncheckedBorderColor = Color(0xFF353844)
+                                        ),
+                                        modifier = Modifier.scale(0.60f).height(20.dp)
+                                    )
+                                }
+                            }
+
+                            else -> { // "DPAD_GROUP" - D-Pad Grouping Tool ("ربط الأسهم")
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(
+                                                onTap = { onDpadGroupToggle(!isDpadGrouped) },
+                                                onLongPress = { onToggleReorderMode() }
+                                            )
+                                        }
+                                ) {
+                                    Icon(
+                                        imageVector = if (isDpadGrouped) Icons.Default.Link else Icons.Default.LinkOff,
+                                        contentDescription = "ربط الأسهم",
+                                        tint = if (isDpadGrouped) Color(0xFFFF3038) else Color(0xFF888B98),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "ربط الأسهم",
+                                        color = if (isDpadGrouped) Color.White else Color(0xFF888B98),
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Switch(
+                                        checked = isDpadGrouped,
+                                        onCheckedChange = onDpadGroupToggle,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = Color(0xFFD50000),
+                                            checkedBorderColor = Color(0xFFFF2430),
+                                            uncheckedThumbColor = Color(0xFFB0B3C1),
+                                            uncheckedTrackColor = Color(0xFF1E2028),
+                                            uncheckedBorderColor = Color(0xFF353844)
+                                        ),
+                                        modifier = Modifier.scale(0.60f).height(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1440,13 +1890,15 @@ fun ArcadeDraggableButton(
     isSelected: Boolean,
     isPreviewMode: Boolean,
     isSnapToGrid: Boolean,
+    isDpadGrouped: Boolean = true,
     gridSpacingPx: Float,
     frameInsetX: Float,
     frameInsetY: Float,
     frameRight: Float,
     frameBottom: Float,
     onClick: () -> Unit,
-    onPositionChanged: (Float, Float) -> Unit
+    onPositionChanged: (Float, Float) -> Unit,
+    onDragDelta: ((Float, Float) -> Unit)? = null
 ) {
     var rawX by remember(buttonState.initialX) { mutableStateOf(buttonState.initialX) }
     var rawY by remember(buttonState.initialY) { mutableStateOf(buttonState.initialY) }
@@ -1454,7 +1906,7 @@ fun ArcadeDraggableButton(
     var offsetY by remember(buttonState.initialY) { mutableStateOf(buttonState.initialY) }
     var isPressedInPreview by remember { mutableStateOf(false) }
 
-    val isDpad = buttonState.id.startsWith("dpad_")
+    val isDpad = DpadGroupingLogic.isDpadButton(buttonState.id)
     val isSystem = buttonState.id == "btn_start" || buttonState.id == "btn_menu"
     val isMacro = buttonState.isMacro
 
@@ -1474,7 +1926,7 @@ fun ArcadeDraggableButton(
     // Touch and Gesture modifier based on Preview Mode
     val interactionModifier = if (!isPreviewMode) {
         Modifier
-            .pointerInput(buttonState.id, isSnapToGrid, gridSpacingPx, frameInsetX, frameInsetY, frameRight, frameBottom) {
+            .pointerInput(buttonState.id, isSnapToGrid, isDpadGrouped, gridSpacingPx, frameInsetX, frameInsetY, frameRight, frameBottom) {
                 detectDragGestures(
                     onDragStart = {
                         rawX = offsetX
@@ -1486,23 +1938,27 @@ fun ArcadeDraggableButton(
                     }
                 ) { change, dragAmount ->
                     change.consume()
-                    rawX += dragAmount.x
-                    rawY += dragAmount.y
-
-                    val maxX = (frameRight - finalWidthPx).coerceAtLeast(frameInsetX)
-                    val maxY = (frameBottom - finalHeightPx).coerceAtLeast(frameInsetY)
-
-                    val clampedRawX = rawX.coerceIn(frameInsetX, maxX)
-                    val clampedRawY = rawY.coerceIn(frameInsetY, maxY)
-
-                    if (isSnapToGrid) {
-                        val snappedX = frameInsetX + ((clampedRawX - frameInsetX) / gridSpacingPx).roundToInt() * gridSpacingPx
-                        val snappedY = frameInsetY + ((clampedRawY - frameInsetY) / gridSpacingPx).roundToInt() * gridSpacingPx
-                        offsetX = snappedX.coerceIn(frameInsetX, maxX)
-                        offsetY = snappedY.coerceIn(frameInsetY, maxY)
+                    if (isDpadGrouped && isDpad && onDragDelta != null) {
+                        onDragDelta(dragAmount.x, dragAmount.y)
                     } else {
-                        offsetX = clampedRawX
-                        offsetY = clampedRawY
+                        rawX += dragAmount.x
+                        rawY += dragAmount.y
+
+                        val maxX = (frameRight - finalWidthPx).coerceAtLeast(frameInsetX)
+                        val maxY = (frameBottom - finalHeightPx).coerceAtLeast(frameInsetY)
+
+                        val clampedRawX = rawX.coerceIn(frameInsetX, maxX)
+                        val clampedRawY = rawY.coerceIn(frameInsetY, maxY)
+
+                        if (isSnapToGrid) {
+                            val snappedX = frameInsetX + ((clampedRawX - frameInsetX) / gridSpacingPx).roundToInt() * gridSpacingPx
+                            val snappedY = frameInsetY + ((clampedRawY - frameInsetY) / gridSpacingPx).roundToInt() * gridSpacingPx
+                            offsetX = snappedX.coerceIn(frameInsetX, maxX)
+                            offsetY = snappedY.coerceIn(frameInsetY, maxY)
+                        } else {
+                            offsetX = clampedRawX
+                            offsetY = clampedRawY
+                        }
                     }
                 }
             }
@@ -1527,7 +1983,13 @@ fun ArcadeDraggableButton(
 
     Box(
         modifier = Modifier
-            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .offset {
+                if (isDpadGrouped && isDpad) {
+                    IntOffset(buttonState.initialX.roundToInt(), buttonState.initialY.roundToInt())
+                } else {
+                    IntOffset(offsetX.roundToInt(), offsetY.roundToInt())
+                }
+            }
             .size(width = finalWidth, height = finalHeight)
             .then(interactionModifier)
             .alpha(buttonState.opacity.coerceIn(0.2f, 1.0f)),
