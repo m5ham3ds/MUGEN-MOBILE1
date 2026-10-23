@@ -16,7 +16,7 @@ object ControllerDataStore {
     private val RIGHT_TOOLBAR_ORDER = stringPreferencesKey("right_toolbar_order")
 
     val DEFAULT_LEFT_TOOLS = listOf("MOVE", "SIZE", "SHAPE", "OPACITY", "DELETE")
-    val DEFAULT_RIGHT_TOOLS = listOf("GRID", "SNAP", "PREVIEW", "DPAD_GROUP")
+    val DEFAULT_RIGHT_TOOLS = listOf("GRID", "SNAP", "PREVIEW", "DPAD_GROUP", "BUTTONS_MANAGER")
 
     fun getLayout(context: Context): Flow<String?> {
         return context.dataStore.data.map { preferences ->

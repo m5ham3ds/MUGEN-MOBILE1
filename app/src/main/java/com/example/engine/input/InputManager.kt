@@ -110,7 +110,9 @@ object InputManager {
         "btn_y" to KeyEvent.KEYCODE_S,       // IKEMEN [Keys_P1] y = s
         "btn_z" to KeyEvent.KEYCODE_D,       // IKEMEN [Keys_P1] z = d
         "btn_start" to KeyEvent.KEYCODE_ENTER, // IKEMEN [Keys_P1] start = RETURN
-        "btn_menu" to KeyEvent.KEYCODE_ESCAPE  // IKEMEN EscOpensMenu = 1 / menu = ESCAPE
+        "btn_menu" to KeyEvent.KEYCODE_ESCAPE, // IKEMEN EscOpensMenu = 1 / menu = ESCAPE
+        "btn_l3" to KeyEvent.KEYCODE_BUTTON_THUMBL, // Leftstick / L3
+        "btn_r3" to KeyEvent.KEYCODE_BUTTON_THUMBR  // Rightstick / R3
     )
 
     /**
@@ -130,7 +132,9 @@ object InputManager {
         "btn_y" to KeyEvent.KEYCODE_NUMPAD_5,   // IKEMEN [Keys_P2] y = 5
         "btn_z" to KeyEvent.KEYCODE_NUMPAD_6,   // IKEMEN [Keys_P2] z = 6
         "btn_start" to KeyEvent.KEYCODE_ENTER,  // IKEMEN [Keys_P2] start = RETURN
-        "btn_menu" to KeyEvent.KEYCODE_ESCAPE
+        "btn_menu" to KeyEvent.KEYCODE_ESCAPE,
+        "btn_l3" to KeyEvent.KEYCODE_BUTTON_THUMBL,
+        "btn_r3" to KeyEvent.KEYCODE_BUTTON_THUMBR
     )
 
     /**
@@ -227,6 +231,8 @@ object InputManager {
                     "z" -> "btn_z"
                     "start" -> "btn_start"
                     "menu" -> "btn_menu"
+                    "l3" -> "btn_l3"
+                    "r3" -> "btn_r3"
                     else -> null
                 }
 
@@ -302,6 +308,8 @@ object InputManager {
             "7" -> KeyEvent.KEYCODE_7
             "8" -> KeyEvent.KEYCODE_8
             "9" -> KeyEvent.KEYCODE_9
+            "THUMBL", "L3" -> KeyEvent.KEYCODE_BUTTON_THUMBL
+            "THUMBR", "R3" -> KeyEvent.KEYCODE_BUTTON_THUMBR
             else -> 0
         }
     }

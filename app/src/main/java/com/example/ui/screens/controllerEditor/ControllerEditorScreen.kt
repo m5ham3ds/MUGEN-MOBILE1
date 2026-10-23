@@ -132,6 +132,7 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
     var buttons by remember { mutableStateOf<List<ControllerButtonState>>(emptyList()) }
     var showPresetMenu by remember { mutableStateOf(false) }
     var showMacroDialog by remember { mutableStateOf(false) }
+    var showButtonsManagerDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
 
     var selectedButtonId by remember { mutableStateOf<String?>(null) }
@@ -197,6 +198,41 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 }
 
                 if (loadedButtons.isNotEmpty()) {
+                    // Ensure core buttons D and W exist (enabled by default)
+                    if (!loadedIds.contains("btn_d")) {
+                        val refBtn = loadedButtons.find { it.id == "btn_y" } ?: loadedButtons.firstOrNull()
+                        val refX = refBtn?.initialX ?: 600f
+                        val refY = refBtn?.initialY ?: 200f
+                        loadedButtons.add(
+                            ControllerButtonState("btn_d", refX + 70f, refY - 70f, "D", isEnabled = true)
+                        )
+                    }
+                    if (!loadedIds.contains("btn_w")) {
+                        val refBtn = loadedButtons.find { it.id == "btn_y" } ?: loadedButtons.firstOrNull()
+                        val refX = refBtn?.initialX ?: 600f
+                        val refY = refBtn?.initialY ?: 200f
+                        loadedButtons.add(
+                            ControllerButtonState("btn_w", refX - 70f, refY - 70f, "W", isEnabled = true)
+                        )
+                    }
+                    // Ensure optional thumbsticks L3 and R3 exist in the pool (disabled by default)
+                    if (!loadedIds.contains("btn_l3")) {
+                        val dpadBtn = loadedButtons.find { it.id == "dpad_left" } ?: loadedButtons.firstOrNull()
+                        val refX = dpadBtn?.initialX ?: 150f
+                        val refY = dpadBtn?.initialY ?: 400f
+                        loadedButtons.add(
+                            ControllerButtonState("btn_l3", refX - 30f, refY + 70f, "L3", scale = 0.85f, isEnabled = false)
+                        )
+                    }
+                    if (!loadedIds.contains("btn_r3")) {
+                        val actBtn = loadedButtons.find { it.id == "btn_c" } ?: loadedButtons.firstOrNull()
+                        val refX = actBtn?.initialX ?: 750f
+                        val refY = actBtn?.initialY ?: 400f
+                        loadedButtons.add(
+                            ControllerButtonState("btn_r3", refX + 50f, refY + 70f, "R3", scale = 0.85f, isEnabled = false)
+                        )
+                    }
+
                     // Ensure all macro definitions exist in the pool as disabled if absent
                     for (macro in MACRO_CATALOG) {
                         if (!loadedIds.contains(macro.id)) {
@@ -682,15 +718,17 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                         selectedPreset = ControllerPreset.CUSTOM
                     },
                     onDelete = {
-                        if (selectedButton.isMacro) {
-                            buttons = buttons.map {
-                                if (it.id == selectedButton.id) it.copy(isEnabled = false) else it
-                            }
-                            selectedButtonId = null
-                            Toast.makeText(context, "تم إخفاء زر الماكرو (${selectedButton.label})", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "لا يمكن حذف أزرار القتال الأساسية للحفاظ على التحكم بالمباراة", Toast.LENGTH_SHORT).show()
+                        buttons = buttons.map {
+                            if (it.id == selectedButton.id) it.copy(isEnabled = false) else it
                         }
+                        val btnLabel = selectedButton.label
+                        selectedButtonId = null
+                        selectedPreset = ControllerPreset.CUSTOM
+                        Toast.makeText(
+                            context,
+                            "تم إخفاء الزر ($btnLabel) - يمكنك إعادته عبر «إدارة أزرار التحكم»",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     },
                     onClose = {
                         activeTool = EditorTool.MOVE
@@ -725,15 +763,17 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 onToolSelect = { tool ->
                     activeTool = tool
                     if (tool == EditorTool.DELETE && selectedButton != null) {
-                        if (selectedButton.isMacro) {
-                            buttons = buttons.map {
-                                if (it.id == selectedButton.id) it.copy(isEnabled = false) else it
-                            }
-                            selectedButtonId = null
-                            Toast.makeText(context, "تم إخفاء زر الماكرو (${selectedButton.label})", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "لا يمكن حذف أزرار القتال الأساسية", Toast.LENGTH_SHORT).show()
+                        buttons = buttons.map {
+                            if (it.id == selectedButton.id) it.copy(isEnabled = false) else it
                         }
+                        val btnLabel = selectedButton.label
+                        selectedButtonId = null
+                        selectedPreset = ControllerPreset.CUSTOM
+                        Toast.makeText(
+                            context,
+                            "تم إخفاء الزر ($btnLabel) - يمكنك إعادته عبر «إدارة أزرار التحكم»",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             )
@@ -783,7 +823,8 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                     coroutineScope.launch {
                         ControllerDataStore.saveRightToolbarOrder(context, newOrder)
                     }
-                }
+                },
+                onOpenButtonsManager = { showButtonsManagerDialog = true }
             )
         }
 
@@ -1049,6 +1090,30 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                     Text("تم وحفظ الاختيارات", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
+        )
+    }
+
+    // --- CORE BUTTONS MANAGER DIALOG ---
+    if (showButtonsManagerDialog) {
+        CoreButtonsManagerDialog(
+            buttons = buttons,
+            isDpadGrouped = isDpadGrouped,
+            onToggleDpadGroup = { grouped ->
+                isDpadGrouped = grouped
+                coroutineScope.launch {
+                    ControllerDataStore.saveDpadGrouped(context, grouped)
+                }
+            },
+            onButtonToggle = { buttonId, newEnabled ->
+                buttons = buttons.map { btn ->
+                    if (btn.id == buttonId) btn.copy(isEnabled = newEnabled) else btn
+                }
+                if (selectedButtonId == buttonId && !newEnabled) {
+                    selectedButtonId = null
+                }
+                selectedPreset = ControllerPreset.CUSTOM
+            },
+            onDismiss = { showButtonsManagerDialog = false }
         )
     }
 }
@@ -1468,7 +1533,8 @@ fun CyberRightToolbar(
     toolOrder: List<String>,
     isReorderMode: Boolean,
     onToggleReorderMode: () -> Unit,
-    onReorderTool: (String, Int) -> Unit
+    onReorderTool: (String, Int) -> Unit,
+    onOpenButtonsManager: () -> Unit
 ) {
     Surface(
         color = Color(0xFF0F1016).copy(alpha = 0.95f),
@@ -1516,7 +1582,7 @@ fun CyberRightToolbar(
                     .background(Color(0xFF331418))
             )
 
-            // Evenly Distributed Tool Items (4 tools: Grid, Snap, Preview, D-pad Grouping)
+            // Evenly Distributed Tool Items (5 tools: Grid, Snap, Preview, D-pad Grouping, Buttons Manager)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1530,6 +1596,7 @@ fun CyberRightToolbar(
                             "GRID" -> Pair(Icons.Default.GridOn, "شبكة")
                             "SNAP" -> Pair(Icons.Default.Grain, "محاذاة")
                             "PREVIEW" -> Pair(Icons.Default.Visibility, "معاينة")
+                            "BUTTONS_MANAGER" -> Pair(Icons.Default.SportsEsports, "أزرار")
                             else -> Pair(if (isDpadGrouped) Icons.Default.Link else Icons.Default.LinkOff, "ربط")
                         }
 
@@ -1704,6 +1771,50 @@ fun CyberRightToolbar(
                                         ),
                                         modifier = Modifier.scale(0.60f).height(20.dp)
                                     )
+                                }
+                            }
+
+                            "BUTTONS_MANAGER" -> {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(
+                                                onTap = { onOpenButtonsManager() },
+                                                onLongPress = { onToggleReorderMode() }
+                                            )
+                                        }
+                                ) {
+                                    Icon(
+                                        Icons.Default.SportsEsports,
+                                        contentDescription = "إدارة أزرار التحكم",
+                                        tint = Color(0xFFFF2430),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "إدارة الأزرار",
+                                        color = Color.White,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Surface(
+                                        color = Color(0xFFD50000),
+                                        shape = RoundedCornerShape(3.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF2430)),
+                                        modifier = Modifier
+                                            .padding(top = 2.dp)
+                                            .clickable { onOpenButtonsManager() }
+                                    ) {
+                                        Text(
+                                            text = "إدارة",
+                                            color = Color.White,
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
                                 }
                             }
 
@@ -2414,6 +2525,8 @@ fun getLabelForId(id: String): String {
         "dpad_right" -> "→"
         "btn_start" -> "START"
         "btn_menu" -> "MENU"
+        "btn_l3" -> "L3"
+        "btn_r3" -> "R3"
         "macro_charge" -> "CHG"
         "macro_ab" -> "A+B"
         "macro_bc" -> "B+C"
@@ -2447,6 +2560,12 @@ fun getPresetLayout(preset: ControllerPreset, widthPx: Float, heightPx: Float): 
         ControllerButtonState("btn_menu", widthPx * 0.58f - unit * 0.50f, heightPx * 0.80f, "MENU", scale = 0.85f)
     )
 
+    // Optional Thumbstick Buttons (L3 / R3) - Disabled and hidden by default
+    val thumbsticks = listOf(
+        ControllerButtonState("btn_l3", dpadCx - unit * 1.35f, dpadCy + unit * 1.25f, "L3", scale = 0.85f, isEnabled = false),
+        ControllerButtonState("btn_r3", widthPx * 0.78f + unit * 1.35f, heightPx * 0.58f + unit * 1.35f, "R3", scale = 0.85f, isEnabled = false)
+    )
+
     // Attack Action Buttons Coordinates (Arcade Cab Curved Layout on Right)
     val actionCx = widthPx * 0.78f
     val actionCy = heightPx * 0.58f
@@ -2456,7 +2575,9 @@ fun getPresetLayout(preset: ControllerPreset, widthPx: Float, heightPx: Float): 
             ControllerButtonState("btn_a", actionCx + unit * 0.90f, actionCy, "A"),
             ControllerButtonState("btn_b", actionCx, actionCy + unit * 0.90f, "B"),
             ControllerButtonState("btn_x", actionCx, actionCy - unit * 0.90f, "X"),
-            ControllerButtonState("btn_y", actionCx - unit * 0.90f, actionCy, "Y")
+            ControllerButtonState("btn_y", actionCx - unit * 0.90f, actionCy, "Y"),
+            ControllerButtonState("btn_w", actionCx - unit * 0.80f, actionCy - unit * 1.55f, "W"),
+            ControllerButtonState("btn_d", actionCx + unit * 0.80f, actionCy - unit * 1.55f, "D")
         )
         ControllerPreset.ARCADE -> listOf(
             ControllerButtonState("btn_x", actionCx - unit * 1.20f, actionCy - unit * 0.60f, "X"),
@@ -2464,13 +2585,18 @@ fun getPresetLayout(preset: ControllerPreset, widthPx: Float, heightPx: Float): 
             ControllerButtonState("btn_z", actionCx + unit * 1.20f, actionCy - unit * 0.60f, "Z"),
             ControllerButtonState("btn_a", actionCx - unit * 1.20f, actionCy + unit * 0.60f, "A"),
             ControllerButtonState("btn_b", actionCx, actionCy + unit * 0.60f, "B"),
-            ControllerButtonState("btn_c", actionCx + unit * 1.20f, actionCy + unit * 0.60f, "C")
+            ControllerButtonState("btn_c", actionCx + unit * 1.20f, actionCy + unit * 0.60f, "C"),
+            ControllerButtonState("btn_w", actionCx - unit * 0.80f, actionCy - unit * 1.55f, "W"),
+            ControllerButtonState("btn_d", actionCx + unit * 0.80f, actionCy - unit * 1.55f, "D")
         )
         else -> listOf(
             // Top Row: X (left), Y (center elevated), Z (right)
             ControllerButtonState("btn_x", actionCx - unit * 1.25f, actionCy - unit * 0.45f, "X"),
             ControllerButtonState("btn_y", actionCx, actionCy - unit * 0.85f, "Y"),
             ControllerButtonState("btn_z", actionCx + unit * 1.25f, actionCy - unit * 0.45f, "Z"),
+            // Auxiliary triggers / shoulder bumpers (W = LT, D = LB)
+            ControllerButtonState("btn_w", actionCx - unit * 0.80f, actionCy - unit * 1.55f, "W"),
+            ControllerButtonState("btn_d", actionCx + unit * 0.80f, actionCy - unit * 1.55f, "D"),
             // Bottom Row: A (left), B (center), C (right)
             ControllerButtonState("btn_a", actionCx - unit * 1.25f, actionCy + unit * 0.95f, "A"),
             ControllerButtonState("btn_b", actionCx, actionCy + unit * 0.55f, "B"),
@@ -2478,5 +2604,397 @@ fun getPresetLayout(preset: ControllerPreset, widthPx: Float, heightPx: Float): 
         )
     }
 
-    return dpad + system + actionButtons
+    return dpad + system + thumbsticks + actionButtons
+}
+
+// ============================================================================
+// CORE BUTTONS MANAGER DIALOG (PHASE UI-02.4)
+// ============================================================================
+
+/**
+ * Dialog for managing visibility and enablement of all core playable buttons.
+ * Categorized into:
+ * 1. Combat Action Buttons (A, B, C, X, Y, Z, D, W)
+ * 2. Movement Directions (D-Pad Up, Down, Left, Right) + D-pad Group Link status
+ * 3. System Buttons (START, MENU) with critical feature warnings
+ * 4. Optional Thumbsticks (L3, R3)
+ */
+@Composable
+fun CoreButtonsManagerDialog(
+    buttons: List<ControllerButtonState>,
+    isDpadGrouped: Boolean,
+    onToggleDpadGroup: (Boolean) -> Unit,
+    onButtonToggle: (String, Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val configuration = LocalConfiguration.current
+    val maxDialogHeight = (configuration.screenHeightDp.dp * 0.72f).coerceIn(240.dp, 440.dp)
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth(0.90f)
+            .wrapContentHeight(),
+        containerColor = Color(0xFF101218),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.SportsEsports,
+                        contentDescription = null,
+                        tint = Color(0xFFFF2430),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        "إدارة أزرار التحكم الأساسية",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+                Surface(
+                    color = Color(0xFF1E202A),
+                    shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B3E4C))
+                ) {
+                    val activeCount = buttons.count { !it.isMacro && it.isEnabled }
+                    val totalCount = buttons.count { !it.isMacro }
+                    Text(
+                        text = "النشطة: $activeCount / $totalCount",
+                        color = Color(0xFFB0B3C2),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "تحكم بظهور وتفعيل أزرار اللعب الأساسية. إخفاء أي زر يحفظ إحداثياته وإعداداته ويمكنك إعادته بأي وقت دون فقدان موقعه.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF9E9FA8)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = maxDialogHeight)
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // SECTION 1: COMBAT ACTION BUTTONS (8 BUTTONS)
+                    CoreCategoryHeader(title = "أزرار القتال (Combat Actions)", count = 8)
+
+                    val combatButtonIds = listOf(
+                        Triple("btn_x", "X (لكمة خفيفة)", "Light Punch - مفتاح A"),
+                        Triple("btn_y", "Y (لكمة متوسطة)", "Medium Punch - مفتاح S"),
+                        Triple("btn_z", "Z (لكمة ثقيلة)", "Heavy Punch - مفتاح D"),
+                        Triple("btn_a", "A (ركلة خفيفة)", "Light Kick - مفتاح Z"),
+                        Triple("btn_b", "B (ركلة متوسطة)", "Medium Kick - مفتاح X"),
+                        Triple("btn_c", "C (ركلة ثقيلة)", "Heavy Kick - مفتاح C"),
+                        Triple("btn_d", "D (مصد علوي / LB)", "Left Bumper - مفتاح Q"),
+                        Triple("btn_w", "W (زناد علوي / LT)", "Left Trigger - مفتاح W")
+                    )
+
+                    combatButtonIds.forEach { (id, title, desc) ->
+                        val btn = buttons.find { it.id == id }
+                        val isEnabled = btn?.isEnabled == true
+                        CoreButtonItemRow(
+                            id = id,
+                            title = title,
+                            description = desc,
+                            isEnabled = isEnabled,
+                            accentColor = Color(ControllerVisualSpecs.getButtonAccentColorInt(id)),
+                            label = getLabelForId(id),
+                            warningText = null,
+                            onToggle = { onButtonToggle(id, it) }
+                        )
+                    }
+
+                    // SECTION 2: D-PAD DIRECTIONS (4 ARROWS)
+                    CoreCategoryHeader(title = "أسهم الحركة (D-Pad)", count = 4)
+
+                    // D-Pad Grouping Quick Switch
+                    Surface(
+                        color = Color(0xFF171A24),
+                        shape = CyberCutSmall,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isDpadGrouped) Color(0xFFFF2430) else Color(0xFF2C2F3E)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (isDpadGrouped) Icons.Default.Link else Icons.Default.LinkOff,
+                                    contentDescription = null,
+                                    tint = if (isDpadGrouped) Color(0xFFFF3038) else Color(0xFF888B98),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "ربط الأسهم (D-Pad Group)",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (isDpadGrouped) "مفعل: تحريك وتكبير جميع الأسهم كوحدة واحدة" else "معطل: تحريك كل سهم بشكل منفرد",
+                                        color = Color(0xFF9E9FA8),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = isDpadGrouped,
+                                onCheckedChange = onToggleDpadGroup,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFFD50000),
+                                    checkedBorderColor = Color(0xFFFF2430)
+                                ),
+                                modifier = Modifier.scale(0.75f)
+                            )
+                        }
+                    }
+
+                    val dpadButtonIds = listOf(
+                        Triple("dpad_up", "سهم لأعلى (Up)", "حركة القفز والتحرك لأعلى"),
+                        Triple("dpad_down", "سهم لأسفل (Down)", "حركة الانحناء والتفادي"),
+                        Triple("dpad_left", "سهم لليسار (Left)", "التحرك والتراجع للخلف / الصد"),
+                        Triple("dpad_right", "سهم لليمين (Right)", "التقدم للأمام نحو الخصم")
+                    )
+
+                    dpadButtonIds.forEach { (id, title, desc) ->
+                        val btn = buttons.find { it.id == id }
+                        val isEnabled = btn?.isEnabled == true
+                        CoreButtonItemRow(
+                            id = id,
+                            title = title,
+                            description = desc,
+                            isEnabled = isEnabled,
+                            accentColor = Color(ControllerVisualSpecs.getButtonAccentColorInt(id)),
+                            label = getLabelForId(id),
+                            warningText = if (!isEnabled) "تنبيه: تعطيل هذا السهم قد يمنع بعض حركات القتال والمناورة" else null,
+                            onToggle = { onButtonToggle(id, it) }
+                        )
+                    }
+
+                    // SECTION 3: SYSTEM BUTTONS (START & MENU)
+                    CoreCategoryHeader(title = "أزرار النظام (System Buttons)", count = 2)
+
+                    val systemButtonIds = listOf(
+                        Triple("btn_start", "زر START (بدء وتأكيد)", "بدء المباراة واختيار القوائم وتنفيذ حركة Taunt"),
+                        Triple("btn_menu", "زر MENU (إيقاف وقائمة)", "إيقاف مؤقت وفتح قائمة MUGEN الرئيسية")
+                    )
+
+                    systemButtonIds.forEach { (id, title, desc) ->
+                        val btn = buttons.find { it.id == id }
+                        val isEnabled = btn?.isEnabled == true
+                        CoreButtonItemRow(
+                            id = id,
+                            title = title,
+                            description = desc,
+                            isEnabled = isEnabled,
+                            accentColor = Color(ControllerVisualSpecs.getButtonAccentColorInt(id)),
+                            label = getLabelForId(id),
+                            warningText = if (!isEnabled) "تحذير: زر ضروري لإيقاف المباراة مؤقتاً والوصول لقوائم اللعبة" else null,
+                            onToggle = { onButtonToggle(id, it) }
+                        )
+                    }
+
+                    // SECTION 4: OPTIONAL THUMBSTICKS (L3 & R3)
+                    CoreCategoryHeader(title = "أزرار الجويستيك الاختيارية (Thumbsticks L3 / R3)", count = 2)
+
+                    val thumbstickButtonIds = listOf(
+                        Triple("btn_l3", "L3 (نقر عصا التحكم اليسرى)", "Left Stick Click - زر إضافي معطل افتراضياً"),
+                        Triple("btn_r3", "R3 (نقر عصا التحكم اليمنى)", "Right Stick Click - زر إضافي معطل افتراضياً")
+                    )
+
+                    thumbstickButtonIds.forEach { (id, title, desc) ->
+                        val btn = buttons.find { it.id == id }
+                        val isEnabled = btn?.isEnabled == true
+                        CoreButtonItemRow(
+                            id = id,
+                            title = title,
+                            description = desc,
+                            isEnabled = isEnabled,
+                            accentColor = Color(ControllerVisualSpecs.getButtonAccentColorInt(id)),
+                            label = getLabelForId(id),
+                            warningText = null,
+                            isOptional = true,
+                            onToggle = { onButtonToggle(id, it) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD50000)),
+                shape = CyberButtonCut
+            ) {
+                Text("إغلاق", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+@Composable
+private fun CoreCategoryHeader(title: String, count: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            color = Color(0xFFFF3038),
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp
+        )
+        Text(
+            text = "($count)",
+            color = Color(0xFF707384),
+            fontSize = 11.sp
+        )
+    }
+}
+
+@Composable
+private fun CoreButtonItemRow(
+    id: String,
+    title: String,
+    description: String,
+    isEnabled: Boolean,
+    accentColor: Color,
+    label: String,
+    warningText: String? = null,
+    isOptional: Boolean = false,
+    onToggle: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onToggle(!isEnabled) },
+        shape = CyberCutSmall,
+        colors = CardDefaults.cardColors(
+            containerColor = if (isEnabled) Color(0xFF1E1719) else Color(0xFF13151D)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isEnabled) Color(0xFFFF2430).copy(alpha = 0.85f) else Color(0xFF2A2D3A)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Button Badge / Icon
+                Surface(
+                    color = if (isEnabled) accentColor.copy(alpha = 0.25f) else Color(0xFF1C1E28),
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.5.dp,
+                        if (isEnabled) accentColor else Color(0xFF383C4C)
+                    ),
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = label,
+                            color = if (isEnabled) accentColor else Color(0xFF888B98),
+                            fontWeight = FontWeight.Black,
+                            fontSize = if (label.length > 2) 10.sp else 14.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = title,
+                            color = if (isEnabled) Color.White else Color(0xFF8E909D),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        if (isOptional) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                color = Color(0xFF2A2418),
+                                shape = RoundedCornerShape(3.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = "اختياري",
+                                    color = Color(0xFFFFB74D),
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = description,
+                        color = Color(0xFF757888),
+                        fontSize = 10.sp
+                    )
+                    if (warningText != null) {
+                        Text(
+                            text = warningText,
+                            color = Color(0xFFFF8A80),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFFD50000),
+                    checkedBorderColor = Color(0xFFFF2430),
+                    uncheckedThumbColor = Color(0xFF707384),
+                    uncheckedTrackColor = Color(0xFF1B1D26),
+                    uncheckedBorderColor = Color(0xFF2E3140)
+                ),
+                modifier = Modifier.scale(0.75f)
+            )
+        }
+    }
 }

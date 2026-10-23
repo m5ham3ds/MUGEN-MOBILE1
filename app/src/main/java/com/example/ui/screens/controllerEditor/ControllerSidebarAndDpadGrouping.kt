@@ -195,7 +195,7 @@ object DpadGroupingLogic {
  */
 object ToolbarReorderManager {
     val LEFT_TOOLS = listOf("MOVE", "SIZE", "SHAPE", "OPACITY", "DELETE")
-    val RIGHT_TOOLS = listOf("GRID", "SNAP", "PREVIEW", "DPAD_GROUP")
+    val RIGHT_TOOLS = listOf("GRID", "SNAP", "PREVIEW", "DPAD_GROUP", "BUTTONS_MANAGER")
 
     fun isLeftTool(toolId: String): Boolean = toolId in LEFT_TOOLS
     fun isRightTool(toolId: String): Boolean = toolId in RIGHT_TOOLS

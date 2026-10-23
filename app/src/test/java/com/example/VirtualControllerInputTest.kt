@@ -396,4 +396,107 @@ class VirtualControllerInputTest {
 
         tempDir.deleteRecursively()
     }
+
+    /**
+     * Requirement 11 (Phase UI-02.4): L3 and R3 thumbsticks map to KEYCODE_BUTTON_THUMBL and KEYCODE_BUTTON_THUMBR.
+     */
+    @Test
+    fun testL3AndR3ThumbstickButtonsMapped() {
+        val keyL3 = InputManager.buttonIdToKeyCode("btn_l3")
+        val keyR3 = InputManager.buttonIdToKeyCode("btn_r3")
+
+        assertEquals(KeyEvent.KEYCODE_BUTTON_THUMBL, keyL3)
+        assertEquals(KeyEvent.KEYCODE_BUTTON_THUMBR, keyR3)
+    }
+
+    /**
+     * Requirement 12 (Phase UI-02.4): Core button hiding and restoration preserves coordinates and state.
+     * Hidden buttons do not accept touch or render, and restored buttons maintain their saved coordinates.
+     */
+    @Test
+    fun testCoreButtonHidingAndRestoration() {
+        val controller = NativeVirtualControllerView(context)
+
+        // 1. Initially btn_d is enabled, btn_l3 is disabled
+        val initialButtons = listOf(
+            ControllerButtonState("btn_d", 500f, 200f, "D", scale = 1.1f, opacity = 0.8f, isEnabled = true),
+            ControllerButtonState("btn_l3", 150f, 400f, "L3", scale = 0.9f, opacity = 0.7f, isEnabled = false)
+        )
+        controller.applyControllerButtons(initialButtons)
+
+        val activeModels1 = controller.getButtonModels()
+        assertEquals(1, activeModels1.size)
+        assertEquals("btn_d", activeModels1[0].id)
+
+        // 2. Hide btn_d and enable btn_l3
+        val updatedButtons = initialButtons.map {
+            when (it.id) {
+                "btn_d" -> it.copy(isEnabled = false)
+                "btn_l3" -> it.copy(isEnabled = true)
+                else -> it
+            }
+        }
+        controller.applyControllerButtons(updatedButtons)
+
+        val activeModels2 = controller.getButtonModels()
+        assertEquals(1, activeModels2.size)
+        assertEquals("btn_l3", activeModels2[0].id)
+        assertEquals(150f, activeModels2[0].left, 0.01f)
+        assertEquals(400f, activeModels2[0].top, 0.01f)
+
+        // 3. Restore btn_d - coordinates, scale, and opacity are perfectly preserved
+        val restoredButtons = updatedButtons.map {
+            if (it.id == "btn_d") it.copy(isEnabled = true) else it
+        }
+        controller.applyControllerButtons(restoredButtons)
+
+        val activeModels3 = controller.getButtonModels()
+        assertEquals(2, activeModels3.size)
+        val restoredD = activeModels3.first { it.id == "btn_d" }
+        assertEquals(500f, restoredD.left, 0.01f)
+        assertEquals(200f, restoredD.top, 0.01f)
+        assertEquals(1.1f, restoredD.scale, 0.01f)
+        assertEquals(0.8f, restoredD.opacity, 0.01f)
+    }
+
+    /**
+     * Requirement 13 (Phase UI-02.4): Left and Right toolbars have 5 symmetrical items.
+     */
+    @Test
+    fun testSymmetricalFiveItemToolbars() {
+        val leftTools = com.example.data.settings.ControllerDataStore.DEFAULT_LEFT_TOOLS
+        val rightTools = com.example.data.settings.ControllerDataStore.DEFAULT_RIGHT_TOOLS
+
+        assertEquals(5, leftTools.size)
+        assertEquals(5, rightTools.size)
+        assertTrue(rightTools.contains("BUTTONS_MANAGER"))
+        assertTrue(leftTools.contains("DELETE"))
+    }
+
+    /**
+     * Requirement 14 (Phase UI-02.4): Default presets include D and W (enabled) and L3 and R3 (disabled).
+     */
+    @Test
+    fun testDefaultPresetIncludesDAndWEnabledAndL3R3Disabled() {
+        val preset = com.example.ui.screens.controllerEditor.getPresetLayout(
+            com.example.ui.screens.controllerEditor.ControllerPreset.SIX_BUTTON,
+            1280f,
+            720f
+        )
+
+        val btnD = preset.find { it.id == "btn_d" }
+        val btnW = preset.find { it.id == "btn_w" }
+        val btnL3 = preset.find { it.id == "btn_l3" }
+        val btnR3 = preset.find { it.id == "btn_r3" }
+
+        assertNotNull("btn_d must exist in preset", btnD)
+        assertNotNull("btn_w must exist in preset", btnW)
+        assertNotNull("btn_l3 must exist in preset", btnL3)
+        assertNotNull("btn_r3 must exist in preset", btnR3)
+
+        assertTrue("btn_d must be enabled by default", btnD!!.isEnabled)
+        assertTrue("btn_w must be enabled by default", btnW!!.isEnabled)
+        assertFalse("btn_l3 must be disabled by default", btnL3!!.isEnabled)
+        assertFalse("btn_r3 must be disabled by default", btnR3!!.isEnabled)
+    }
 }
