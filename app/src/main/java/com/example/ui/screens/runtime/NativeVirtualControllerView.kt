@@ -140,6 +140,42 @@ class NativeVirtualControllerView @JvmOverloads constructor(
                     )
                 }
                 if (loaded.isNotEmpty()) {
+                    val loadedIds = loaded.map { it.id }.toSet()
+                    val isFullActionSet = loadedIds.containsAll(listOf("btn_a", "btn_b", "btn_c", "btn_x", "btn_y", "btn_z"))
+                    if (isFullActionSet) {
+                        if (!loadedIds.contains("btn_d")) {
+                            val refBtn = loaded.find { it.id == "btn_y" } ?: loaded.firstOrNull()
+                            val refX = refBtn?.initialX ?: (w * 0.78f)
+                            val refY = refBtn?.initialY ?: (h * 0.58f)
+                            loaded.add(
+                                ControllerButtonState("btn_d", refX + 70f, refY - 70f, "D", isEnabled = true)
+                            )
+                        }
+                        if (!loadedIds.contains("btn_w")) {
+                            val refBtn = loaded.find { it.id == "btn_y" } ?: loaded.firstOrNull()
+                            val refX = refBtn?.initialX ?: (w * 0.78f)
+                            val refY = refBtn?.initialY ?: (h * 0.58f)
+                            loaded.add(
+                                ControllerButtonState("btn_w", refX - 70f, refY - 70f, "W", isEnabled = true)
+                            )
+                        }
+                        if (!loadedIds.contains("btn_l3")) {
+                            val dpadBtn = loaded.find { it.id == "dpad_left" } ?: loaded.firstOrNull()
+                            val refX = dpadBtn?.initialX ?: (w * 0.22f)
+                            val refY = dpadBtn?.initialY ?: (h * 0.58f)
+                            loaded.add(
+                                ControllerButtonState("btn_l3", refX - 30f, refY + 70f, "L3", scale = 0.85f, isEnabled = false)
+                            )
+                        }
+                        if (!loadedIds.contains("btn_r3")) {
+                            val actBtn = loaded.find { it.id == "btn_c" } ?: loaded.firstOrNull()
+                            val refX = actBtn?.initialX ?: (w * 0.78f)
+                            val refY = actBtn?.initialY ?: (h * 0.58f)
+                            loaded.add(
+                                ControllerButtonState("btn_r3", refX + 50f, refY + 70f, "R3", scale = 0.85f, isEnabled = false)
+                            )
+                        }
+                    }
                     applyControllerButtons(loaded)
                     return
                 }

@@ -221,3 +221,63 @@ object ToolbarReorderManager {
         return mutable
     }
 }
+
+/**
+ * Coordinate mapping bridge translating between:
+ * 1. ControllerEditorScreen's bounded cybernetic editing frame [frameInsetX, frameInsetY, frameRight, frameBottom]
+ * 2. NativeVirtualControllerView's full-screen runtime game display [0, 0, screenWidth, screenHeight]
+ *
+ * Guarantees that placing a button against the top edge of the editor frame (frameInsetY) maps 1:1
+ * to the very top edge of the game screen (gameY = 0f), and placing against the left edge maps to gameX = 0f.
+ */
+object ControllerCoordinateMapper {
+    fun mapEditorToGamePosition(
+        editorX: Float,
+        editorY: Float,
+        btnWidthPx: Float,
+        btnHeightPx: Float,
+        frameInsetX: Float,
+        frameInsetY: Float,
+        frameRight: Float,
+        frameBottom: Float,
+        screenWidthPx: Float,
+        screenHeightPx: Float
+    ): Pair<Float, Float> {
+        val availFrameW = (frameRight - frameInsetX - btnWidthPx).coerceAtLeast(1f)
+        val availScreenW = (screenWidthPx - btnWidthPx).coerceAtLeast(1f)
+        val fracX = ((editorX - frameInsetX) / availFrameW).coerceIn(0f, 1f)
+        val gameX = fracX * availScreenW
+
+        val availFrameH = (frameBottom - frameInsetY - btnHeightPx).coerceAtLeast(1f)
+        val availScreenH = (screenHeightPx - btnHeightPx).coerceAtLeast(1f)
+        val fracY = ((editorY - frameInsetY) / availFrameH).coerceIn(0f, 1f)
+        val gameY = fracY * availScreenH
+
+        return Pair(gameX, gameY)
+    }
+
+    fun mapGameToEditorPosition(
+        gameX: Float,
+        gameY: Float,
+        btnWidthPx: Float,
+        btnHeightPx: Float,
+        frameInsetX: Float,
+        frameInsetY: Float,
+        frameRight: Float,
+        frameBottom: Float,
+        screenWidthPx: Float,
+        screenHeightPx: Float
+    ): Pair<Float, Float> {
+        val availFrameW = (frameRight - frameInsetX - btnWidthPx).coerceAtLeast(1f)
+        val availScreenW = (screenWidthPx - btnWidthPx).coerceAtLeast(1f)
+        val fracX = (gameX / availScreenW).coerceIn(0f, 1f)
+        val editorX = frameInsetX + fracX * availFrameW
+
+        val availFrameH = (frameBottom - frameInsetY - btnHeightPx).coerceAtLeast(1f)
+        val availScreenH = (screenHeightPx - btnHeightPx).coerceAtLeast(1f)
+        val fracY = (gameY / availScreenH).coerceIn(0f, 1f)
+        val editorY = frameInsetY + fracY * availFrameH
+
+        return Pair(editorX, editorY)
+    }
+}

@@ -76,7 +76,8 @@ data class ControllerButtonState(
     val opacity: Float = 0.7f,
     val isEnabled: Boolean = true,
     val isMacro: Boolean = false,
-    val shape: String = "DEFAULT"
+    val shape: String = "DEFAULT",
+    val isMapped: Boolean = false
 )
 
 enum class ControllerPreset(val displayName: String) {
@@ -162,7 +163,9 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
 
         val savedRightOrder = ControllerDataStore.getRightToolbarOrder(context).firstOrNull()
         if (!savedRightOrder.isNullOrEmpty()) {
-            rightToolOrder = savedRightOrder
+            val valid = savedRightOrder.filter { it in ControllerDataStore.DEFAULT_RIGHT_TOOLS }
+            val missing = ControllerDataStore.DEFAULT_RIGHT_TOOLS.filter { it !in valid }
+            rightToolOrder = valid + missing
         }
 
         val savedLayout = ControllerDataStore.getLayout(context).firstOrNull()
@@ -276,12 +279,25 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
 
         // Canvas frame boundaries strictly and symmetrically centered between toolbars
         val density = LocalDensity.current
-        val sidebarMarginPx = with(density) { (sidebarWidth + 14.dp).toPx() }
-        val frameInsetX = sidebarMarginPx
-        val frameInsetY = with(density) { 56.dp.toPx() }
-        val frameRight = widthPx - sidebarMarginPx
-        val frameBottom = heightPx - with(density) { 14.dp.toPx() }
-        val gridSpacingPx = with(density) { 32.dp.toPx() }
+        val sidebarMarginPx = with(density) { (sidebarWidth + 12.dp).toPx() }
+        val frameInsetY = with(density) { 54.dp.toPx() }
+        val bottomMarginPx = with(density) { 14.dp.toPx() }
+        val desiredCellSizeDp = 32f
+        val approxCellPx = with(density) { desiredCellSizeDp.dp.toPx() }
+
+        // Derive an exact integer number of rows so every vertical cell is a strict 1:1 square
+        val availHeightPx = (heightPx - frameInsetY - bottomMarginPx).coerceAtLeast(approxCellPx * 4)
+        val numRows = (availHeightPx / approxCellPx).toInt().coerceAtLeast(6)
+        val gridSpacingPx = availHeightPx / numRows // Uniform cell dimension for BOTH X and Y
+        val frameHeight = numRows * gridSpacingPx
+        val frameBottom = frameInsetY + frameHeight
+
+        // Derive exact integer number of columns using the identical square gridSpacingPx
+        val maxAvailWidthPx = (widthPx - 2 * sidebarMarginPx).coerceAtLeast(gridSpacingPx * 8)
+        val numCols = (maxAvailWidthPx / gridSpacingPx).toInt().coerceAtLeast(8)
+        val frameWidth = numCols * gridSpacingPx
+        val frameInsetX = (widthPx - frameWidth) / 2f
+        val frameRight = frameInsetX + frameWidth
 
         // Initialize preset layout when measurements are available and not custom
         LaunchedEffect(selectedPreset, widthPx, heightPx) {
@@ -316,7 +332,52 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                         )
                     }
                 }
-                buttons = presetButtons
+                // Map game coordinates into the bounded editor frame
+                buttons = presetButtons.map { b ->
+                    val (baseW, baseH) = ControllerVisualSpecs.getBaseDimensionsDp(b.id, b.isMacro)
+                    val btnWPx = with(density) { (baseW * b.scale).dp.toPx() }
+                    val btnHPx = with(density) { (baseH * b.scale).dp.toPx() }
+                    val (edX, edY) = ControllerCoordinateMapper.mapGameToEditorPosition(
+                        gameX = b.initialX,
+                        gameY = b.initialY,
+                        btnWidthPx = btnWPx,
+                        btnHeightPx = btnHPx,
+                        frameInsetX = frameInsetX,
+                        frameInsetY = frameInsetY,
+                        frameRight = frameRight,
+                        frameBottom = frameBottom,
+                        screenWidthPx = widthPx,
+                        screenHeightPx = heightPx
+                    )
+                    b.copy(initialX = edX, initialY = edY, isMapped = true)
+                }
+            }
+        }
+
+        // Synchronize loaded buttons into frame coordinates if needed once measurements are ready
+        LaunchedEffect(widthPx, heightPx, buttons.size) {
+            if (widthPx > 0 && heightPx > 0 && buttons.isNotEmpty() && buttons.any { !it.isMapped }) {
+                buttons = buttons.map { b ->
+                    if (b.isMapped) b
+                    else {
+                        val (baseW, baseH) = ControllerVisualSpecs.getBaseDimensionsDp(b.id, b.isMacro)
+                        val btnWPx = with(density) { (baseW * b.scale).dp.toPx() }
+                        val btnHPx = with(density) { (baseH * b.scale).dp.toPx() }
+                        val (edX, edY) = ControllerCoordinateMapper.mapGameToEditorPosition(
+                            gameX = b.initialX,
+                            gameY = b.initialY,
+                            btnWidthPx = btnWPx,
+                            btnHeightPx = btnHPx,
+                            frameInsetX = frameInsetX,
+                            frameInsetY = frameInsetY,
+                            frameRight = frameRight,
+                            frameBottom = frameBottom,
+                            screenWidthPx = widthPx,
+                            screenHeightPx = heightPx
+                        )
+                        b.copy(initialX = edX, initialY = edY, isMapped = true)
+                    }
+                }
             }
         }
 
@@ -331,14 +392,13 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 )
             )
 
-            // Technical Grid Lines strictly constrained inside the editor frame
+            // Technical Grid Lines strictly constrained inside the editor frame (Strict 1:1 square cells)
             if (isGridVisible) {
                 clipRect(left = frameInsetX, top = frameInsetY, right = frameRight, bottom = frameBottom) {
                     // Vertical grid lines
-                    var x = frameInsetX
-                    var colIndex = 0
-                    while (x <= frameRight) {
-                        val isMajor = (colIndex % 4 == 0)
+                    for (c in 0..numCols) {
+                        val x = frameInsetX + c * gridSpacingPx
+                        val isMajor = (c % 2 == 0)
                         val lineColor = if (isMajor) Color(0xFF384D68).copy(alpha = 0.85f) else Color(0xFF223044).copy(alpha = 0.65f)
                         val strokeWidth = if (isMajor) 1.5f else 1f
                         drawLine(
@@ -347,15 +407,12 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                             end = Offset(x, frameBottom),
                             strokeWidth = strokeWidth
                         )
-                        x += gridSpacingPx
-                        colIndex++
                     }
 
-                    // Horizontal grid lines
-                    var y = frameInsetY
-                    var rowIndex = 0
-                    while (y <= frameBottom) {
-                        val isMajor = (rowIndex % 4 == 0)
+                    // Horizontal grid lines - Every single row is an exact 1:1 square
+                    for (r in 0..numRows) {
+                        val y = frameInsetY + r * gridSpacingPx
+                        val isMajor = (r % 2 == 0)
                         val lineColor = if (isMajor) Color(0xFF384D68).copy(alpha = 0.85f) else Color(0xFF223044).copy(alpha = 0.65f)
                         val strokeWidth = if (isMajor) 1.5f else 1f
                         drawLine(
@@ -364,31 +421,19 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                             end = Offset(frameRight, y),
                             strokeWidth = strokeWidth
                         )
-                        y += gridSpacingPx
-                        rowIndex++
                     }
 
                     // Precision intersection dots on major blueprint coordinates
-                    var ix = frameInsetX
-                    var c = 0
-                    while (ix <= frameRight) {
-                        if (c % 4 == 0) {
-                            var iy = frameInsetY
-                            var r = 0
-                            while (iy <= frameBottom) {
-                                if (r % 4 == 0) {
-                                    drawCircle(
-                                        color = Color(0xFF5B82B0).copy(alpha = 0.90f),
-                                        radius = 2.dp.toPx(),
-                                        center = Offset(ix, iy)
-                                    )
-                                }
-                                iy += gridSpacingPx
-                                r++
-                            }
+                    for (c in 0..numCols step 2) {
+                        val ix = frameInsetX + c * gridSpacingPx
+                        for (r in 0..numRows step 2) {
+                            val iy = frameInsetY + r * gridSpacingPx
+                            drawCircle(
+                                color = Color(0xFF5B82B0).copy(alpha = 0.90f),
+                                radius = 2.dp.toPx(),
+                                center = Offset(ix, iy)
+                            )
                         }
-                        ix += gridSpacingPx
-                        c++
                     }
                 }
             }
@@ -590,6 +635,8 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                 frameInsetY = frameInsetY,
                 frameRight = frameRight,
                 frameBottom = frameBottom,
+                screenWidthPx = widthPx,
+                screenHeightPx = heightPx,
                 onClick = {
                     if (!isPreviewMode) {
                         selectedButtonId = buttonState.id
@@ -851,15 +898,31 @@ fun ControllerEditorScreen(onNavigateBack: () -> Unit) {
                     coroutineScope.launch {
                         val jsonArray = JSONArray()
                         buttons.forEach { b ->
+                            val (baseW, baseH) = ControllerVisualSpecs.getBaseDimensionsDp(b.id, b.isMacro)
+                            val btnWPx = with(density) { (baseW * b.scale).dp.toPx() }
+                            val btnHPx = with(density) { (baseH * b.scale).dp.toPx() }
+                            val (gameX, gameY) = ControllerCoordinateMapper.mapEditorToGamePosition(
+                                editorX = b.initialX,
+                                editorY = b.initialY,
+                                btnWidthPx = btnWPx,
+                                btnHeightPx = btnHPx,
+                                frameInsetX = frameInsetX,
+                                frameInsetY = frameInsetY,
+                                frameRight = frameRight,
+                                frameBottom = frameBottom,
+                                screenWidthPx = widthPx,
+                                screenHeightPx = heightPx
+                            )
                             val obj = JSONObject()
                             obj.put("id", b.id)
-                            obj.put("x", b.initialX)
-                            obj.put("y", b.initialY)
+                            obj.put("x", gameX.toDouble())
+                            obj.put("y", gameY.toDouble())
                             obj.put("scale", b.scale.toDouble())
                             obj.put("opacity", b.opacity.toDouble())
                             obj.put("enabled", b.isEnabled)
                             obj.put("macro", b.isMacro)
                             obj.put("shape", b.shape)
+                            obj.put("frameMapped", true)
                             jsonArray.put(obj)
                         }
                         ControllerDataStore.saveLayout(context, jsonArray.toString())
@@ -1399,13 +1462,16 @@ fun CyberLeftToolbar(
                     .background(Color(0xFF331418))
             )
 
-            // Evenly Distributed Tool Items
+            // Scrollable Tool Items
+            val leftScrollState = rememberScrollState()
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(vertical = 2.dp),
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(leftScrollState)
+                    .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceEvenly
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 toolOrder.forEachIndexed { index, toolId ->
                     val tool = when (toolId) {
@@ -1582,13 +1648,16 @@ fun CyberRightToolbar(
                     .background(Color(0xFF331418))
             )
 
-            // Evenly Distributed Tool Items (5 tools: Grid, Snap, Preview, D-pad Grouping, Buttons Manager)
+            // Scrollable Tool Items (5 tools: Grid, Snap, Preview, D-pad Grouping, Buttons Manager)
+            val rightScrollState = rememberScrollState()
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(vertical = 2.dp),
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rightScrollState)
+                    .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceEvenly
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 toolOrder.forEachIndexed { index, toolId ->
                     if (isReorderMode) {
@@ -1775,8 +1844,10 @@ fun CyberRightToolbar(
                             }
 
                             "BUTTONS_MANAGER" -> {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                Surface(
+                                    color = Color(0xFF1E1418),
+                                    shape = CyberButtonCut,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF2430)),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .pointerInput(Unit) {
@@ -1786,34 +1857,37 @@ fun CyberRightToolbar(
                                             )
                                         }
                                 ) {
-                                    Icon(
-                                        Icons.Default.SportsEsports,
-                                        contentDescription = "إدارة أزرار التحكم",
-                                        tint = Color(0xFFFF2430),
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Text(
-                                        text = "إدارة الأزرار",
-                                        color = Color.White,
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        textAlign = TextAlign.Center
-                                    )
-                                    Surface(
-                                        color = Color(0xFFD50000),
-                                        shape = RoundedCornerShape(3.dp),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF2430)),
-                                        modifier = Modifier
-                                            .padding(top = 2.dp)
-                                            .clickable { onOpenButtonsManager() }
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center,
+                                        modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp)
                                     ) {
+                                        Icon(
+                                            Icons.Default.SportsEsports,
+                                            contentDescription = "إدارة أزرار التحكم",
+                                            tint = Color(0xFFFF2430),
+                                            modifier = Modifier.size(15.dp)
+                                        )
                                         Text(
-                                            text = "إدارة",
+                                            text = "إدارة الأزرار",
                                             color = Color.White,
                                             fontSize = 8.sp,
                                             fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                            textAlign = TextAlign.Center
                                         )
+                                        Surface(
+                                            color = Color(0xFFD50000),
+                                            shape = RoundedCornerShape(3.dp),
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "إدارة",
+                                                color = Color.White,
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2007,6 +2081,8 @@ fun ArcadeDraggableButton(
     frameInsetY: Float,
     frameRight: Float,
     frameBottom: Float,
+    screenWidthPx: Float = 0f,
+    screenHeightPx: Float = 0f,
     onClick: () -> Unit,
     onPositionChanged: (Float, Float) -> Unit,
     onDragDelta: ((Float, Float) -> Unit)? = null
@@ -2095,10 +2171,28 @@ fun ArcadeDraggableButton(
     Box(
         modifier = Modifier
             .offset {
-                if (isDpadGrouped && isDpad) {
-                    IntOffset(buttonState.initialX.roundToInt(), buttonState.initialY.roundToInt())
+                if (isPreviewMode && screenWidthPx > 0f && screenHeightPx > 0f) {
+                    val curX = if (isDpadGrouped && isDpad) buttonState.initialX else offsetX
+                    val curY = if (isDpadGrouped && isDpad) buttonState.initialY else offsetY
+                    val (gameX, gameY) = ControllerCoordinateMapper.mapEditorToGamePosition(
+                        editorX = curX,
+                        editorY = curY,
+                        btnWidthPx = finalWidthPx,
+                        btnHeightPx = finalHeightPx,
+                        frameInsetX = frameInsetX,
+                        frameInsetY = frameInsetY,
+                        frameRight = frameRight,
+                        frameBottom = frameBottom,
+                        screenWidthPx = screenWidthPx,
+                        screenHeightPx = screenHeightPx
+                    )
+                    IntOffset(gameX.roundToInt(), gameY.roundToInt())
                 } else {
-                    IntOffset(offsetX.roundToInt(), offsetY.roundToInt())
+                    if (isDpadGrouped && isDpad) {
+                        IntOffset(buttonState.initialX.roundToInt(), buttonState.initialY.roundToInt())
+                    } else {
+                        IntOffset(offsetX.roundToInt(), offsetY.roundToInt())
+                    }
                 }
             }
             .size(width = finalWidth, height = finalHeight)

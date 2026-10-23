@@ -382,12 +382,42 @@ object InputManager {
                 var foundEscOpensMenu = false
                 var foundMenuInP1 = false
                 var foundStartInP1 = false
+                var foundDInP1 = false
+                var foundWInP1 = false
                 var foundP2Section = false
+                var foundDInP2 = false
+                var foundWInP2 = false
                 var modified = false
 
                 for (rawLine in lines) {
                     val line = rawLine.trim()
                     if (line.startsWith("[") && line.endsWith("]")) {
+                        // Before switching section away from Keys_P1, append missing d or w
+                        if (currentSection.equals("Keys_P1", ignoreCase = true)) {
+                            if (!foundDInP1) {
+                                updatedLines.add("d        = q")
+                                modified = true
+                                foundDInP1 = true
+                            }
+                            if (!foundWInP1) {
+                                updatedLines.add("w        = w")
+                                modified = true
+                                foundWInP1 = true
+                            }
+                        }
+                        if (currentSection.equals("Keys_P2", ignoreCase = true)) {
+                            if (!foundDInP2) {
+                                updatedLines.add("d        = 0")
+                                modified = true
+                                foundDInP2 = true
+                            }
+                            if (!foundWInP2) {
+                                updatedLines.add("w        = 7")
+                                modified = true
+                                foundWInP2 = true
+                            }
+                        }
+
                         currentSection = line.substring(1, line.length - 1).trim()
                         if (currentSection.equals("Keys_P2", ignoreCase = true)) {
                             foundP2Section = true
@@ -428,9 +458,94 @@ object InputManager {
                             foundStartInP1 = true
                             continue
                         }
+                        if (line.startsWith("d", ignoreCase = true) && line.contains("=")) {
+                            val parts = line.split("=", limit = 2)
+                            val k = parts[0].trim()
+                            if (k.equals("d", ignoreCase = true)) {
+                                val v = parts[1].trim()
+                                if (v.equals("Not used", ignoreCase = true) || v.isEmpty() || v == "0") {
+                                    updatedLines.add("d        = q")
+                                    modified = true
+                                } else {
+                                    updatedLines.add(rawLine)
+                                }
+                                foundDInP1 = true
+                                continue
+                            }
+                        }
+                        if (line.startsWith("w", ignoreCase = true) && line.contains("=")) {
+                            val parts = line.split("=", limit = 2)
+                            val k = parts[0].trim()
+                            if (k.equals("w", ignoreCase = true)) {
+                                val v = parts[1].trim()
+                                if (v.equals("Not used", ignoreCase = true) || v.isEmpty() || v == "0") {
+                                    updatedLines.add("w        = w")
+                                    modified = true
+                                } else {
+                                    updatedLines.add(rawLine)
+                                }
+                                foundWInP1 = true
+                                continue
+                            }
+                        }
+                    }
+
+                    if (currentSection.equals("Keys_P2", ignoreCase = true)) {
+                        if (line.startsWith("d", ignoreCase = true) && line.contains("=")) {
+                            val parts = line.split("=", limit = 2)
+                            val k = parts[0].trim()
+                            if (k.equals("d", ignoreCase = true)) {
+                                val v = parts[1].trim()
+                                if (v.equals("Not used", ignoreCase = true) || v.isEmpty()) {
+                                    updatedLines.add("d        = 0")
+                                    modified = true
+                                } else {
+                                    updatedLines.add(rawLine)
+                                }
+                                foundDInP2 = true
+                                continue
+                            }
+                        }
+                        if (line.startsWith("w", ignoreCase = true) && line.contains("=")) {
+                            val parts = line.split("=", limit = 2)
+                            val k = parts[0].trim()
+                            if (k.equals("w", ignoreCase = true)) {
+                                val v = parts[1].trim()
+                                if (v.equals("Not used", ignoreCase = true) || v.isEmpty()) {
+                                    updatedLines.add("w        = 7")
+                                    modified = true
+                                } else {
+                                    updatedLines.add(rawLine)
+                                }
+                                foundWInP2 = true
+                                continue
+                            }
+                        }
                     }
 
                     updatedLines.add(rawLine)
+                }
+
+                // If file ended inside Keys_P1 or Keys_P2
+                if (currentSection.equals("Keys_P1", ignoreCase = true)) {
+                    if (!foundDInP1) {
+                        updatedLines.add("d        = q")
+                        modified = true
+                    }
+                    if (!foundWInP1) {
+                        updatedLines.add("w        = w")
+                        modified = true
+                    }
+                }
+                if (currentSection.equals("Keys_P2", ignoreCase = true)) {
+                    if (!foundDInP2) {
+                        updatedLines.add("d        = 0")
+                        modified = true
+                    }
+                    if (!foundWInP2) {
+                        updatedLines.add("w        = 7")
+                        modified = true
+                    }
                 }
 
                 // If EscOpensMenu was never present in [Config], insert it

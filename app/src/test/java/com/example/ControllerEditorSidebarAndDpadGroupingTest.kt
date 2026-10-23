@@ -344,34 +344,35 @@ class ControllerEditorSidebarAndDpadGroupingTest {
     @Test
     fun testRightToolbarReorderingWithinColumn() {
         val initialOrder = ControllerDataStore.DEFAULT_RIGHT_TOOLS
-        assertEquals(listOf("GRID", "SNAP", "PREVIEW", "DPAD_GROUP"), initialOrder)
+        assertEquals(listOf("GRID", "SNAP", "PREVIEW", "DPAD_GROUP", "BUTTONS_MANAGER"), initialOrder)
 
         // Move "DPAD_GROUP" up to position 2
         val movedUp = ToolbarReorderManager.reorderTool(initialOrder, "DPAD_GROUP", -1)
-        assertEquals(listOf("GRID", "SNAP", "DPAD_GROUP", "PREVIEW"), movedUp)
+        assertEquals(listOf("GRID", "SNAP", "DPAD_GROUP", "PREVIEW", "BUTTONS_MANAGER"), movedUp)
 
         // Move "GRID" down to position 1
         val gridDown = ToolbarReorderManager.reorderTool(movedUp, "GRID", 1)
-        assertEquals(listOf("SNAP", "GRID", "DPAD_GROUP", "PREVIEW"), gridDown)
+        assertEquals(listOf("SNAP", "GRID", "DPAD_GROUP", "PREVIEW", "BUTTONS_MANAGER"), gridDown)
     }
 
     @Test
     fun testToolsCannotCrossColumns() {
         for (tool in ToolbarReorderManager.LEFT_TOOLS) {
             assertTrue(ToolbarReorderManager.isLeftTool(tool))
-            assertFalse("Left tool $tool must not be allowed in right column", ToolbarReorderManager.isRightTool(tool))
+            assertFalse("Left tool ${tool} must not be allowed in right column", ToolbarReorderManager.isRightTool(tool))
         }
 
         for (tool in ToolbarReorderManager.RIGHT_TOOLS) {
             assertTrue(ToolbarReorderManager.isRightTool(tool))
-            assertFalse("Right tool $tool must not be allowed in left column", ToolbarReorderManager.isLeftTool(tool))
+            assertFalse("Right tool ${tool} must not be allowed in left column", ToolbarReorderManager.isLeftTool(tool))
         }
     }
 
     @Test
     fun testBackwardsCompatibilityDefaults() {
         assertEquals(5, ControllerDataStore.DEFAULT_LEFT_TOOLS.size)
-        assertEquals(4, ControllerDataStore.DEFAULT_RIGHT_TOOLS.size)
+        assertEquals(5, ControllerDataStore.DEFAULT_RIGHT_TOOLS.size)
         assertTrue(ControllerDataStore.DEFAULT_RIGHT_TOOLS.contains("DPAD_GROUP"))
+        assertTrue(ControllerDataStore.DEFAULT_RIGHT_TOOLS.contains("BUTTONS_MANAGER"))
     }
 }

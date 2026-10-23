@@ -499,4 +499,166 @@ class VirtualControllerInputTest {
         assertFalse("btn_l3 must be disabled by default", btnL3!!.isEnabled)
         assertFalse("btn_r3 must be disabled by default", btnR3!!.isEnabled)
     }
+
+    /**
+     * Requirement 15: ensureDefaultConfigIni patches missing d and w key bindings into existing config.ini files.
+     */
+    @Test
+    fun testEnsureDefaultConfigIniPatchesDAndWBindings() {
+        val tempDir = File(context.cacheDir, "test_dw_patch_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val saveDir = File(tempDir, "save")
+        saveDir.mkdirs()
+        val oldConfig = """
+            [Config]
+            EscOpensMenu = 1
+
+            [Keys_P1]
+            Joystick = -1
+            GUID     = 
+            up       = UP
+            down     = DOWN
+            left     = LEFT
+            right    = RIGHT
+            a        = z
+            b        = x
+            c        = c
+            x        = a
+            y        = s
+            z        = d
+            start    = RETURN
+            menu     = ESCAPE
+
+            [Keys_P2]
+            Joystick = -1
+            GUID     = 
+            up       = i
+            down     = k
+            left     = j
+            right    = l
+            a        = 1
+            b        = 2
+            c        = 3
+            x        = 4
+            y        = 5
+            z        = 6
+            start    = RETURN
+            menu     = ESCAPE
+        """.trimIndent()
+        File(saveDir, "config.ini").writeText(oldConfig)
+
+        InputManager.ensureDefaultConfigIni(tempDir)
+
+        val patchedContent = File(saveDir, "config.ini").readText()
+        assertTrue("Keys_P1 must contain d = q", patchedContent.contains("d        = q") || patchedContent.contains("d = q"))
+        assertTrue("Keys_P1 must contain w = w", patchedContent.contains("w        = w") || patchedContent.contains("w = w"))
+        assertTrue("Keys_P2 must contain d = 0", patchedContent.contains("d        = 0") || patchedContent.contains("d = 0"))
+        assertTrue("Keys_P2 must contain w = 7", patchedContent.contains("w        = 7") || patchedContent.contains("w = 7"))
+
+        InputManager.parseConfigIni(patchedContent)
+        val keyD = InputManager.buttonIdToKeyCode("btn_d")
+        val keyW = InputManager.buttonIdToKeyCode("btn_w")
+        assertEquals(KeyEvent.KEYCODE_Q, keyD)
+        assertEquals(KeyEvent.KEYCODE_W, keyW)
+
+        tempDir.deleteRecursively()
+    }
+
+    /**
+     * Requirement 16: NativeVirtualControllerView.updateLayoutFromJson injects missing D and W into legacy layouts.
+     */
+    @Test
+    fun testUpdateLayoutFromJsonInjectsMissingDAndW() {
+        val controller = NativeVirtualControllerView(context)
+        val legacyJson = """
+            [
+                {"id":"dpad_up","x":100.0,"y":100.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false},
+                {"id":"btn_a","x":600.0,"y":200.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false},
+                {"id":"btn_b","x":700.0,"y":200.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false},
+                {"id":"btn_c","x":800.0,"y":200.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false},
+                {"id":"btn_x","x":600.0,"y":100.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false},
+                {"id":"btn_y","x":700.0,"y":100.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false},
+                {"id":"btn_z","x":800.0,"y":100.0,"scale":1.0,"opacity":0.7,"enabled":true,"macro":false}
+            ]
+        """.trimIndent()
+
+        controller.updateLayoutFromJson(legacyJson, width = 1280f, height = 720f)
+        val models = controller.getButtonModels()
+
+        val btnD = models.find { it.id == "btn_d" }
+        val btnW = models.find { it.id == "btn_w" }
+        val btnL3 = models.find { it.id == "btn_l3" }
+        val btnR3 = models.find { it.id == "btn_r3" }
+
+        assertNotNull("btn_d must be injected into legacy layout", btnD)
+        assertNotNull("btn_w must be injected into legacy layout", btnW)
+        // Since btn_l3 and btn_r3 are disabled by default, they are not in active buttonModels until enabled
+        assertNull("btn_l3 should be disabled and thus not in active buttonModels", btnL3)
+        assertNull("btn_r3 should be disabled and thus not in active buttonModels", btnR3)
+    }
+
+    /**
+     * Requirement 17: ControllerCoordinateMapper maps flush against frame edge to game edge (0f).
+     */
+    @Test
+    fun testCoordinateMapperFlushAlignment() {
+        val frameInsetX = 88f
+        val frameInsetY = 54f
+        val frameRight = 1280f - 88f
+        val frameBottom = 720f - 14f
+        val screenW = 1280f
+        val screenH = 720f
+        val btnW = 64f
+        val btnH = 64f
+
+        // Top-left flush inside editor frame
+        val (gameXTopLeft, gameYTopLeft) = com.example.ui.screens.controllerEditor.ControllerCoordinateMapper.mapEditorToGamePosition(
+            editorX = frameInsetX,
+            editorY = frameInsetY,
+            btnWidthPx = btnW,
+            btnHeightPx = btnH,
+            frameInsetX = frameInsetX,
+            frameInsetY = frameInsetY,
+            frameRight = frameRight,
+            frameBottom = frameBottom,
+            screenWidthPx = screenW,
+            screenHeightPx = screenH
+        )
+        assertEquals("Top edge in editor must map to gameY = 0f", 0f, gameYTopLeft, 0.001f)
+        assertEquals("Left edge in editor must map to gameX = 0f", 0f, gameXTopLeft, 0.001f)
+
+        // Bottom-right flush inside editor frame
+        val (gameXBottomRight, gameYBottomRight) = com.example.ui.screens.controllerEditor.ControllerCoordinateMapper.mapEditorToGamePosition(
+            editorX = frameRight - btnW,
+            editorY = frameBottom - btnH,
+            btnWidthPx = btnW,
+            btnHeightPx = btnH,
+            frameInsetX = frameInsetX,
+            frameInsetY = frameInsetY,
+            frameRight = frameRight,
+            frameBottom = frameBottom,
+            screenWidthPx = screenW,
+            screenHeightPx = screenH
+        )
+        assertEquals("Bottom edge in editor must map to screenH - btnH", screenH - btnH, gameYBottomRight, 0.001f)
+        assertEquals("Right edge in editor must map to screenW - btnW", screenW - btnW, gameXBottomRight, 0.001f)
+
+        // Inverse mapping
+        val (editorXRestored, editorYRestored) = com.example.ui.screens.controllerEditor.ControllerCoordinateMapper.mapGameToEditorPosition(
+            gameX = 0f,
+            gameY = 0f,
+            btnWidthPx = btnW,
+            btnHeightPx = btnH,
+            frameInsetX = frameInsetX,
+            frameInsetY = frameInsetY,
+            frameRight = frameRight,
+            frameBottom = frameBottom,
+            screenWidthPx = screenW,
+            screenHeightPx = screenH
+        )
+        assertEquals(frameInsetX, editorXRestored, 0.001f)
+        assertEquals(frameInsetY, editorYRestored, 0.001f)
+    }
 }
+
