@@ -67,7 +67,8 @@ data class GeminiCharacterProposal(
 object GeminiApiClient {
 
     private const val TAG = "GeminiApiClient"
-    const val DEFAULT_MODEL = "gemini-3.8-flash"
+    const val DEFAULT_MODEL = "gemini-2.5-flash"
+    const val FALLBACK_MODEL = "gemini-1.5-flash"
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -91,7 +92,7 @@ object GeminiApiClient {
             sanitized = sanitized.replace(keyToMask, "[REDACTED_API_KEY]")
         }
         // Match generic AIza Google API key pattern
-        sanitized = sanitized.replace(Regex("AIza[0-9A-Za-z\\-_]{35}"), "[REDACTED_API_KEY]")
+        sanitized = sanitized.replace(Regex("AIza[0-9A-Za-z\\-_]{30,45}"), "[REDACTED_API_KEY]")
         return sanitized.take(300)
     }
 
@@ -115,7 +116,7 @@ object GeminiApiClient {
 
     /**
      * Tests the validity of the user's personal API key and its ability to communicate
-     * with the `gemini-3.8-flash` model.
+     * with the `gemini-2.5-flash` model (falling back to `gemini-1.5-flash` if 404).
      */
     suspend fun testConnection(apiKey: String): GeminiResult<String> = withContext(Dispatchers.IO) {
         val trimmedKey = apiKey.trim()
@@ -126,8 +127,6 @@ object GeminiApiClient {
                 isAuthError = true
             )
         }
-
-        val url = "$BASE_URL/$DEFAULT_MODEL:generateContent"
 
         val requestBodyJson = JSONObject().apply {
             val contentsArray = JSONArray().apply {
@@ -147,97 +146,119 @@ object GeminiApiClient {
             put("generationConfig", genConfig)
         }
 
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("x-goog-api-key", trimmedKey)
-            .addHeader("Content-Type", "application/json")
-            .post(requestBodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        val modelsToTry = listOf(DEFAULT_MODEL, FALLBACK_MODEL)
+        var lastErr: GeminiResult.Error? = null
 
-        try {
-            httpClient.newCall(request).execute().use { response ->
-                val code = response.code
-                val bodyStr = response.body?.string() ?: ""
+        for (modelName in modelsToTry) {
+            val startTime = System.currentTimeMillis()
+            val url = "$BASE_URL/$modelName:generateContent"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("x-goog-api-key", trimmedKey)
+                .addHeader("Content-Type", "application/json")
+                .post(requestBodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
 
-                when (code) {
-                    200 -> {
-                        GeminiResult.Success(
-                            data = "الاتصال ناجح مع نموذج $DEFAULT_MODEL",
-                            modelName = DEFAULT_MODEL
-                        )
-                    }
-                    400 -> {
-                        val serverMsg = extractServerError(bodyStr, code, trimmedKey)
-                        Log.w(TAG, "Gemini testConnection 400: $serverMsg")
-                        GeminiResult.Error(
-                            code = 400,
-                            message = "طلب غير صالح (400 Bad Request): $serverMsg"
-                        )
-                    }
-                    401, 403 -> {
-                        Log.w(TAG, "Gemini API Auth Failure ($code)")
-                        GeminiResult.Error(
-                            code = code,
-                            message = "مفتاح Gemini غير صالح أو غير مصرح له بالوصول للنموذج (401/403 Unauthorized).",
-                            isAuthError = true
-                        )
-                    }
-                    429 -> {
-                        Log.w(TAG, "Gemini API Quota Exceeded (429)")
-                        GeminiResult.Error(
-                            code = 429,
-                            message = "تم تجاوز حصة الاستخدام أو حد الطلبات لحسابك لدى Google (429 Quota Exceeded).",
-                            isQuotaError = true
-                        )
-                    }
-                    500, 503 -> {
-                        Log.w(TAG, "Gemini API Server Error ($code)")
-                        GeminiResult.Error(
-                            code = code,
-                            message = "خوادم Google Gemini تواجه ضغطاً أو غير متاحة مؤقتاً ($code)."
-                        )
-                    }
-                    else -> {
-                        val serverMsg = extractServerError(bodyStr, code, trimmedKey)
-                        Log.w(TAG, "Gemini API Unexpected Response ($code)")
-                        GeminiResult.Error(
-                            code = code,
-                            message = "استجابة غير متوقعة من خادم Gemini ($code): $serverMsg"
-                        )
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val code = response.code
+                    val bodyStr = response.body?.string() ?: ""
+                    val latencyMs = System.currentTimeMillis() - startTime
+
+                    when (code) {
+                        200 -> {
+                            return@withContext GeminiResult.Success(
+                                data = "الاتصال ناجح مع نموذج $modelName (زمن الاستجابة: ${latencyMs}ms)",
+                                modelName = modelName
+                            )
+                        }
+                        404 -> {
+                            // Model not found for this API version or account, proceed to next fallback
+                            val serverMsg = extractServerError(bodyStr, code, trimmedKey)
+                            Log.w(TAG, "Model $modelName returned 404: $serverMsg, attempting next model if available")
+                            lastErr = GeminiResult.Error(
+                                code = 404,
+                                message = "النموذج $modelName غير متاح في حسابك (404 Not Found)."
+                            )
+                        }
+                        400 -> {
+                            val serverMsg = extractServerError(bodyStr, code, trimmedKey)
+                            Log.w(TAG, "Gemini testConnection 400: $serverMsg")
+                            return@withContext GeminiResult.Error(
+                                code = 400,
+                                message = "طلب غير صالح (400 Bad Request): $serverMsg"
+                            )
+                        }
+                        401, 403 -> {
+                            Log.w(TAG, "Gemini API Auth Failure ($code)")
+                            return@withContext GeminiResult.Error(
+                                code = code,
+                                message = "مفتاح Gemini غير صالح أو غير مصرح له بالوصول للنموذج (401/403 Unauthorized). تأكد من صحة المفتاح وصلاحيات المشروع.",
+                                isAuthError = true
+                            )
+                        }
+                        429 -> {
+                            Log.w(TAG, "Gemini API Quota Exceeded (429)")
+                            return@withContext GeminiResult.Error(
+                                code = 429,
+                                message = "تم تجاوز حصة الاستخدام أو حد الطلبات لحسابك لدى Google (429 Quota Exceeded).",
+                                isQuotaError = true
+                            )
+                        }
+                        500, 503 -> {
+                            Log.w(TAG, "Gemini API Server Error ($code)")
+                            return@withContext GeminiResult.Error(
+                                code = code,
+                                message = "خوادم Google Gemini تواجه ضغطاً أو غير متاحة مؤقتاً ($code)."
+                            )
+                        }
+                        else -> {
+                            val serverMsg = extractServerError(bodyStr, code, trimmedKey)
+                            Log.w(TAG, "Gemini API Unexpected Response ($code)")
+                            return@withContext GeminiResult.Error(
+                                code = code,
+                                message = "استجابة غير متوقعة من خادم Gemini ($code): $serverMsg"
+                            )
+                        }
                     }
                 }
+            } catch (e: SocketTimeoutException) {
+                Log.e(TAG, "Socket timeout in testConnection: ${e.message}")
+                return@withContext GeminiResult.Error(
+                    code = -3,
+                    message = "انتهت مهلة انتظار الاتصال بخادم Gemini (Connection Timeout)."
+                )
+            } catch (e: UnknownHostException) {
+                Log.e(TAG, "UnknownHostException in testConnection: ${e.message}")
+                return@withContext GeminiResult.Error(
+                    code = -4,
+                    message = "تعذر الوصول إلى خوادم Google: تأكد من اتصال الجهاز بالإنترنت."
+                )
+            } catch (e: ConnectException) {
+                Log.e(TAG, "ConnectException in testConnection: ${e.message}")
+                return@withContext GeminiResult.Error(
+                    code = -5,
+                    message = "تعذر إنشاء اتصال بخوادم Google Gemini."
+                )
+            } catch (e: IOException) {
+                Log.e(TAG, "Network connection error in testConnection: ${e.message}")
+                return@withContext GeminiResult.Error(
+                    code = -1,
+                    message = "تعذر الاتصال بالشبكة: ${sanitizeErrorMessage(e.message, trimmedKey)}"
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Unexpected error in testConnection: ${e.message}")
+                return@withContext GeminiResult.Error(
+                    code = -2,
+                    message = "حدث خطأ غير متوقع أثناء اختبار الاتصال: ${sanitizeErrorMessage(e.localizedMessage, trimmedKey)}"
+                )
             }
-        } catch (e: SocketTimeoutException) {
-            Log.e(TAG, "Socket timeout in testConnection: ${e.message}")
-            GeminiResult.Error(
-                code = -3,
-                message = "انتهت مهلة انتظار الاتصال بخادم Gemini (Connection Timeout)."
-            )
-        } catch (e: UnknownHostException) {
-            Log.e(TAG, "UnknownHostException in testConnection: ${e.message}")
-            GeminiResult.Error(
-                code = -4,
-                message = "تعذر الوصول إلى خوادم Google: تأكد من اتصال الجهاز بالإنترنت."
-            )
-        } catch (e: ConnectException) {
-            Log.e(TAG, "ConnectException in testConnection: ${e.message}")
-            GeminiResult.Error(
-                code = -5,
-                message = "تعذر إنشاء اتصال بخوادم Google Gemini."
-            )
-        } catch (e: IOException) {
-            Log.e(TAG, "Network connection error in testConnection: ${e.message}")
-            GeminiResult.Error(
-                code = -1,
-                message = "تعذر الاتصال بالشبكة: ${sanitizeErrorMessage(e.message, trimmedKey)}"
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error in testConnection: ${e.message}")
-            GeminiResult.Error(
-                code = -2,
-                message = "حدث خطأ غير متوقع أثناء اختبار الاتصال: ${sanitizeErrorMessage(e.localizedMessage, trimmedKey)}"
-            )
         }
+
+        return@withContext lastErr ?: GeminiResult.Error(
+            code = 404,
+            message = "تعذر الاتصال بنماذج Google Gemini المحددة."
+        )
     }
 
     /**
@@ -348,62 +369,71 @@ object GeminiApiClient {
             })
         }
 
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("x-goog-api-key", trimmedKey)
-            .addHeader("Content-Type", "application/json")
-            .post(requestBodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-
-        // Perform call with at most 1 retry for transient network/server issues
-        var attempts = 0
-        val maxAttempts = 2
+        val modelsToTry = listOf(DEFAULT_MODEL, FALLBACK_MODEL)
         var lastError: GeminiResult.Error? = null
 
-        while (attempts < maxAttempts) {
-            attempts++
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val code = response.code
-                    val responseBody = response.body?.string() ?: ""
+        for (activeModel in modelsToTry) {
+            val url = "$BASE_URL/$activeModel:generateContent"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("x-goog-api-key", trimmedKey)
+                .addHeader("Content-Type", "application/json")
+                .post(requestBodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
 
-                    if (code != 200) {
-                        val serverMsg = extractServerError(responseBody, code, trimmedKey)
-                        Log.w(TAG, "Gemini analyzeRoster error (attempt $attempts, HTTP $code): $serverMsg")
+            var attempts = 0
+            val maxAttempts = 2
 
-                        val resultError = when (code) {
-                            400 -> GeminiResult.Error(
-                                code = 400,
-                                message = "طلب غير صالح (400 Bad Request): $serverMsg"
-                            )
-                            401, 403 -> GeminiResult.Error(
-                                code = code,
-                                message = "مفتاح Gemini غير صالح أو غير مصرح له (401/403 Unauthorized). يرجى مراجعة المفتاح في الإعدادات.",
-                                isAuthError = true
-                            )
-                            429 -> GeminiResult.Error(
-                                code = 429,
-                                message = "تم تجاوز حصة الاستخدام أو حد الطلبات لحسابك لدى Google (429 Quota Exceeded).",
-                                isQuotaError = true
-                            )
-                            500, 503 -> GeminiResult.Error(
-                                code = code,
-                                message = "خوادم Google Gemini تواجه ضغطاً أو غير متاحة مؤقتاً ($code)."
-                            )
-                            else -> GeminiResult.Error(
-                                code = code,
-                                message = "استجابة غير متوقعة من خادم Gemini ($code): $serverMsg"
-                            )
-                        }
+            while (attempts < maxAttempts) {
+                attempts++
+                try {
+                    val responseResult = httpClient.newCall(request).execute().use { response ->
+                        val code = response.code
+                        val responseBody = response.body?.string() ?: ""
 
-                        // Only retry transient 429 or 5xx once
-                        if ((code == 429 || code == 500 || code == 503) && attempts < maxAttempts) {
-                            delay(1500)
+                        if (code != 200) {
+                            val serverMsg = extractServerError(responseBody, code, trimmedKey)
+                            Log.w(TAG, "Gemini analyzeRoster error (model=$activeModel, attempt=$attempts, HTTP $code): $serverMsg")
+
+                            if (code == 404 && activeModel == DEFAULT_MODEL) {
+                                // Model 404 on default model: immediately break to try FALLBACK_MODEL
+                                lastError = GeminiResult.Error(code = 404, message = "النموذج $activeModel غير متاح (404 Not Found).")
+                                return@use "TRY_NEXT_MODEL"
+                            }
+
+                            val resultError = when (code) {
+                                400 -> GeminiResult.Error(
+                                    code = 400,
+                                    message = "طلب غير صالح (400 Bad Request): $serverMsg"
+                                )
+                                401, 403 -> GeminiResult.Error(
+                                    code = code,
+                                    message = "مفتاح Gemini غير صالح أو غير مصرح له (401/403 Unauthorized). يرجى مراجعة المفتاح في الإعدادات.",
+                                    isAuthError = true
+                                )
+                                429 -> GeminiResult.Error(
+                                    code = 429,
+                                    message = "تم تجاوز حصة الاستخدام أو حد الطلبات لحسابك لدى Google (429 Quota Exceeded).",
+                                    isQuotaError = true
+                                )
+                                500, 503 -> GeminiResult.Error(
+                                    code = code,
+                                    message = "خوادم Google Gemini تواجه ضغطاً أو غير متاحة مؤقتاً ($code)."
+                                )
+                                else -> GeminiResult.Error(
+                                    code = code,
+                                    message = "استجابة غير متوقعة من خادم Gemini ($code): $serverMsg"
+                                )
+                            }
+
+                            if ((code == 429 || code == 500 || code == 503) && attempts < maxAttempts) {
+                                delay(1500)
+                                lastError = resultError
+                                return@use "RETRY"
+                            }
                             lastError = resultError
-                            return@use
+                            return@use "FATAL_ERROR"
                         }
-                        return@withContext resultError
-                    }
 
                     // Parse Candidates safely
                     val rootJson = JSONObject(responseBody)
@@ -508,7 +538,14 @@ object GeminiApiClient {
                         }
                     }
 
-                    return@withContext GeminiResult.Success(parsedList, DEFAULT_MODEL)
+                    return@withContext GeminiResult.Success(parsedList, activeModel)
+                }
+
+                if (responseResult == "TRY_NEXT_MODEL") {
+                    break
+                }
+                if (responseResult == "FATAL_ERROR") {
+                    return@withContext lastError ?: GeminiResult.Error(code = -1, message = "حدث خطأ أثناء معالجة الطلب")
                 }
             } catch (e: SocketTimeoutException) {
                 Log.e(TAG, "SocketTimeoutException (attempt $attempts): ${e.message}")
@@ -554,6 +591,7 @@ object GeminiApiClient {
                 )
             }
         }
+    }
 
         return@withContext lastError ?: GeminiResult.Error(
             code = -1,

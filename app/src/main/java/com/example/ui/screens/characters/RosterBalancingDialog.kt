@@ -25,10 +25,12 @@ import com.example.engine.gemini.GeminiRosterBalancer
 import com.example.engine.scale.*
 import com.example.engine.workspace.ChangeRecord
 import com.example.engine.workspace.CharacterWorkspaceManager
+import com.example.storage.MugenMobileStorage
 import com.example.utils.GeminiKeyStoreManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.abs
 
 @Composable
@@ -102,7 +104,7 @@ fun RosterBalancingDialog(
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = if (isAiPowered) "تحليل ذكي شامل مدعوم بـ Google Gemini (gemini-3.8-flash)" else "تحليل رياضي ومحلي للأبعاد والقتال",
+                                text = if (isAiPowered) "تحليل ذكي شامل مدعوم بـ Google Gemini (gemini-2.5-flash)" else "تحليل رياضي ومحلي للأبعاد والقتال",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isAiPowered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -639,14 +641,47 @@ fun RosterBalancingDialog(
 
                                 withContext(Dispatchers.IO) {
                                     val charMap = characters.associateBy { it.folderName }
+                                    val charsRoot = MugenMobileStorage.getCharsDir(context)
+
                                     for (proposal in summary.proposals) {
                                         if (selectedCharacterIds[proposal.characterId] == true) {
-                                            val charData = charMap[proposal.characterId]
-                                            val cns = charData?.cnsFile
-                                            if (cns != null && cns.isFile) {
+                                            val charId = proposal.characterId
+                                            val charData = charMap[charId]
+                                            val charFolder = File(charsRoot, charId)
+
+                                            // Resolve .def file in active workspace
+                                            val defFile = charData?.defFile?.takeIf { it.isFile }
+                                                ?: File(charFolder, "$charId.def").takeIf { it.isFile }
+                                                ?: charFolder.listFiles { f -> f.extension.equals("def", ignoreCase = true) && !f.name.startsWith("intro", ignoreCase = true) }?.firstOrNull()
+
+                                            // Resolve .cns file in active workspace
+                                            var cnsFile = charData?.cnsFile?.takeIf { it.isFile }
+                                            if (cnsFile == null && defFile != null && defFile.isFile) {
                                                 try {
-                                                    val editor = CnsEditor(cns)
-                                                    val defEditor = charData.defFile?.let { if (it.isFile && it.canRead()) DefEditor(it) else null }
+                                                    val tempDef = DefEditor(defFile)
+                                                    val cnsRel = tempDef.getProperty("files", "cns") ?: tempDef.getProperty("files", "st")
+                                                    if (!cnsRel.isNullOrBlank()) {
+                                                        val cleanRel = cnsRel.replace('\\', '/')
+                                                        cnsFile = File(charFolder, cleanRel).takeIf { it.isFile }
+                                                            ?: charFolder.walkTopDown().firstOrNull { it.isFile && it.name.equals(File(cleanRel).name, ignoreCase = true) }
+                                                    }
+                                                } catch (_: Exception) {}
+                                            }
+                                            if (cnsFile == null) {
+                                                cnsFile = File(charFolder, "$charId.cns").takeIf { it.isFile }
+                                                    ?: charFolder.listFiles { f -> f.extension.equals("cns", ignoreCase = true) }?.firstOrNull()
+                                            }
+
+                                            if (cnsFile != null && cnsFile.isFile) {
+                                                try {
+                                                    // Ensure immutable Vault snapshot exists before modifying
+                                                    if (!CharacterWorkspaceManager.isCharacterVaulted(charId, context)) {
+                                                        CharacterWorkspaceManager.ensureVaultSnapshot(charFolder, context)
+                                                    }
+
+                                                    val preCnsSha = CharacterWorkspaceManager.calculateSha256(cnsFile)
+                                                    val editor = CnsEditor(cnsFile)
+                                                    val defEditor = defFile?.let { if (it.isFile && it.canRead()) DefEditor(it) else null }
 
                                                     // Apply combat stats
                                                     proposal.proposedLife?.let { editor.setProperty("[data]", "life", it.toString()) }
@@ -655,7 +690,7 @@ fun RosterBalancingDialog(
 
                                                     // Apply physical scale & pushbox if enabled
                                                     val sp = proposal.scaleProposal
-                                                    val shouldScale = scaleAdjustmentsEnabled[proposal.characterId] != false
+                                                    val shouldScale = scaleAdjustmentsEnabled[charId] != false
                                                     if (sp != null && shouldScale && (sp.hasScaleAdjustment || selectedTab == 2)) {
                                                         editor.setProperty("[size]", "xscale", sp.proposedXScale.toString())
                                                         editor.setProperty("[size]", "yscale", sp.proposedYScale.toString())
@@ -669,23 +704,34 @@ fun RosterBalancingDialog(
                                                     }
 
                                                     val saveRes = CharacterWorkspaceManager.saveCompleteCharacterEdits(
-                                                        characterId = proposal.characterId,
+                                                        characterId = charId,
                                                         defEditor = defEditor,
                                                         cnsEditor = editor,
                                                         context = context
                                                     )
                                                     if (saveRes.success) {
+                                                        val postCnsSha = CharacterWorkspaceManager.calculateSha256(cnsFile)
+                                                        val diskContent = cnsFile.readText()
+                                                        val hasScaleOnDisk = diskContent.contains("xscale =")
+                                                        android.util.Log.i("RosterBalancingDialog", "Applied balance to '$charId' [path=${cnsFile.absolutePath}, preSha=$preCnsSha, postSha=$postCnsSha, hasScaleOnDisk=$hasScaleOnDisk]")
                                                         appliedCount++
+                                                    } else {
+                                                        android.util.Log.e("RosterBalancingDialog", "Failed to save balance edits for '$charId': ${saveRes.errorMessage}")
                                                     }
-                                                } catch (_: Exception) {}
+                                                } catch (e: Exception) {
+                                                    android.util.Log.e("RosterBalancingDialog", "Exception applying balance to '$charId': ${e.message}", e)
+                                                }
                                             }
                                         }
                                     }
 
-                                    // Ensure fight.def has safe portrait window clipping applied
+                                    // Ensure fight.def has safe portrait window clipping and scale applied
                                     try {
-                                        FightDefManager.ensureSafePortraitClipping(context)
-                                    } catch (_: Exception) {}
+                                        val clipped = FightDefManager.ensureSafePortraitClipping(context)
+                                        android.util.Log.i("RosterBalancingDialog", "Enforced safe portrait clipping in fight.def: success=$clipped")
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("RosterBalancingDialog", "Non-fatal clipping notice: ${e.message}")
+                                    }
                                 }
 
                                 isApplyingChanges = false

@@ -52,32 +52,58 @@ class CnsEditor(val cnsFile: File, val context: Context? = null) {
     data class CnsProperty(val section: String, val key: String, var value: String, var lineIndex: Int)
     
     init {
-        reparseLines()
+        parseLines()
     }
 
-    fun reparseLines() {
-        if (cnsFile.exists() && cnsFile.isFile) {
-            lines.clear()
-            lines.addAll(cnsFile.readLines())
+    /**
+     * Parses the in-memory line buffer into structured properties without touching disk.
+     * Accurately parses section headers even if they contain trailing comments.
+     */
+    fun parseLines() {
+        val pendingValues = mutableMapOf<Pair<String, String>, String>()
+        for ((sec, map) in properties) {
+            for ((key, prop) in map) {
+                pendingValues[sec to key] = prop.value
+            }
         }
         properties.clear()
         val allowedSections = listOf("[data]", "[size]", "[velocity]", "[movement]")
         var currentSection = ""
         for (i in lines.indices) {
-            val line = lines[i].trim()
-            if (line.startsWith("[") && line.endsWith("]")) {
-                currentSection = line.lowercase()
-            } else if (currentSection in allowedSections && line.contains("=")) {
-                val key = line.substringBefore("=").trim().lowercase()
-                val valueStr = line.substringAfter("=").substringBefore(";").trim()
+            val clean = lines[i].substringBefore(";").trim()
+            if (clean.startsWith("[") && clean.endsWith("]")) {
+                currentSection = clean.lowercase()
+            } else if (currentSection in allowedSections && clean.contains("=")) {
+                val key = clean.substringBefore("=").trim().lowercase()
+                val valueStr = clean.substringAfter("=").trim()
                 if (key.isNotEmpty()) {
-                    if (properties[currentSection] == null) properties[currentSection] = mutableMapOf()
-                    if (!properties[currentSection]!!.containsKey(key)) {
-                        properties[currentSection]!![key] = CnsProperty(currentSection, key, valueStr, i)
+                    val secMap = properties.getOrPut(currentSection) { mutableMapOf() }
+                    if (!secMap.containsKey(key)) {
+                        val activeVal = pendingValues[currentSection to key] ?: valueStr
+                        secMap[key] = CnsProperty(currentSection, key, activeVal, i)
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Re-indexes in-memory lines. Preserves compatibility with callers.
+     */
+    fun reparseLines() {
+        parseLines()
+    }
+
+    /**
+     * Reloads lines from disk file, discarding any uncommitted in-memory changes.
+     */
+    fun reloadFromDisk() {
+        if (cnsFile.exists() && cnsFile.isFile) {
+            lines.clear()
+            lines.addAll(cnsFile.readLines())
+        }
+        properties.clear()
+        parseLines()
     }
 
     /**
@@ -89,7 +115,16 @@ class CnsEditor(val cnsFile: File, val context: Context? = null) {
     }
 
     /**
+     * Returns a snapshot map of all key-value pairs in a section.
+     */
+    fun getSectionProperties(section: String): Map<String, String> {
+        val sec = if (section.startsWith("[")) section.lowercase() else "[$section]".lowercase()
+        return properties[sec]?.mapValues { it.value.value } ?: emptyMap()
+    }
+
+    /**
      * Sets or updates property value in section.
+     * Updates in-memory lines and property map without discarding unwritten changes.
      */
     fun setProperty(section: String, key: String, newValue: String) {
         val sec = if (section.startsWith("[")) section.lowercase() else "[$section]".lowercase()
@@ -110,10 +145,11 @@ class CnsEditor(val cnsFile: File, val context: Context? = null) {
             if (sectionHeaderIndex != -1) {
                 lines.add(sectionHeaderIndex + 1, "$keyLower = $newValue")
             } else {
+                lines.add("")
                 lines.add(sec)
                 lines.add("$keyLower = $newValue")
             }
-            reparseLines()
+            parseLines()
         }
     }
     
