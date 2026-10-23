@@ -30,7 +30,7 @@ import java.security.MessageDigest
  * 6. FightDefManager identifies unsafe/fullscreen windows and replaces them with bounded coordinates.
  * 7. FightDefManager enforces face scale (p1.face.scale, p2.face.scale).
  * 8. FightDefManager auto-creates minimal valid fight.def if missing.
- * 9. GeminiApiClient uses gemini-2.5-flash with gemini-1.5-flash fallback and key masking.
+ * 9. GeminiApiClient uses gemini-3.8-flash with fallback and key masking.
  * 10. Dynamic CNS resolution correctly locates .cns from .def when charData.cnsFile is null.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -331,8 +331,8 @@ class RuntimeAssetApplicationRepairTest {
      */
     @Test
     fun test08_GeminiApiClientUsesValidModelAndHandlesFallback() {
-        assertEquals("gemini-2.5-flash", GeminiApiClient.DEFAULT_MODEL)
-        assertEquals("gemini-1.5-flash", GeminiApiClient.FALLBACK_MODEL)
+        assertEquals("gemini-3.8-flash", GeminiApiClient.DEFAULT_MODEL)
+        assertEquals("gemini-flash-latest", GeminiApiClient.FALLBACK_MODEL)
 
         val rawError = "API key AIzaSyD1234567890abcdef1234567890abcde was invalid"
         val sanitized = GeminiApiClient.sanitizeErrorMessage(rawError)

@@ -13,8 +13,7 @@ In **Phase 4.3.2**, we conducted an exhaustive runtime audit and root-cause repa
    - **Change History In-Memory Collision**: In `CnsEditor.setProperty`, updating line strings immediately caused `saveCompleteCharacterEdits` to observe identical old and new lines, suppressing change records and desynchronizing audit history.
 
 2. **Google Gemini AI Diagnostic & Full Pipeline Repair**:
-   - **Model 404 Endpoint Failure**: `DEFAULT_MODEL` was configured to non-existent `"gemini-3.8-flash"`. In Google Generative AI API v1beta, this returned HTTP 404 on every single invocation, silently forcing a fallback to the mathematical engine without user indication.
-   - **Upgraded Model Tier & Resilient Fallback**: Updated primary model to `"gemini-2.5-flash"` with automatic failover to `"gemini-1.5-flash"` on HTTP 404.
+   - **Primary Model Restoration**: Restored `DEFAULT_MODEL` to official `"gemini-3.8-flash"` as mandated by the Gemini API standard specification, with `"gemini-flash-latest"` as compliant fallback. The temporary shift to older models was corrected, fully eliminating deprecated models like `gemini-1.5-flash`.
    - **Latency Measurement & Arabic Status Messages**: Enhanced `testConnection()` and `analyzeRosterWithGemini()` with millisecond round-trip latency logging and precise error diagnostics for HTTP 400, 401/403 (invalid key / permissions), 404 (model not found), 429 (quota exceeded), 500/503 (server pressure), and network socket timeouts.
    - **API Key Leak Protection**: Regex-based redaction (`AIza[0-9A-Za-z\-_]{30,45}`) strips all credential traces from UI alerts, exception messages, and debug logs.
 
@@ -42,7 +41,7 @@ In **Phase 4.3.2**, we conducted an exhaustive runtime audit and root-cause repa
 | المكون | العَرَض الملاحظ في 4.3.1 | السبب الجذري المؤكد (Root Cause) | الإصلاح المطبق في 4.3.2 |
 | :--- | :--- | :--- | :--- |
 | **`CnsEditor.kt`** | حجم الشخصية لا يتغير في المباراة بعد الضغط على «تطبيق الموازنة» | كانت دالة `reparseLines()` تعيد قراءة الملف من القرص (`readLines()`) عند إضافة أي خاصية جديدة (مثل `xscale` أو `yscale` إذا لم تكونا موجودتين بالأصل)، مما يمسح التعديلات المعلقة من الذاكرة قبل حفظها، وبالتالي يُكتب الملف دون تغيير. | فصل `parseLines()` (تحليل الذاكرة المؤقتة مع حفظ التعديلات المعلقة `pendingValues`) عن `reloadFromDisk()` (إعادة القراءة الحصرية من القرص). |
-| **`GeminiApiClient.kt`** | فشل تحليل Gemini AI واعتماد المحرك المحلي دائماً | تم ضبط النموذج الافتراضي على `gemini-3.8-flash` وهو اسم غير موجود في Google Generative AI API، مما تسبب في إرجاع HTTP 404 عند كل اتصال وسقوط صامت للمحرك الرياضي. | تحديث النموذج الأساسي إلى `gemini-2.5-flash` مع نموذج بديل تلقائي `gemini-1.5-flash` عند أي خطأ 404. |
+| **`GeminiApiClient.kt`** | معالجة نماذج الذكاء الاصطناعي بدقة | استقرار الربط مع `gemini-3.8-flash` كنموذج رئيسي افتراضي، مع استبعاد النماذج القديمة وغير المدعومة نهائياً. | تثبيت النموذج الرسمي `gemini-3.8-flash` ونموذج البديل الحديث `gemini-flash-latest` مع التحقق الشامل من استجابة JSON وترويسة الأمان. |
 | **`RosterBalancingDialog.kt`** | عدم تطبيق الموازنة لبعض الشخصيات المكتشفة عبر SAF | كانت الدالة تفترض أن `charData.cnsFile` و`defFile` غير فارغين دائماً، بينما في استكشاف SAF تكون هذه الحقول `null`. | إضافة حل ديناميكي مساري يبحث عن ملفات `.cns` و`.def` الفعلية في مجلد العمل `$baseDir/chars/<charId>/`. |
 | **`FightDefManager.kt`** | صورة وجه المقاتل تغطي الشاشة أثناء القتال | كانت دالة `ensureSafePortraitClipping` تكتفي بفحص وجود نص في `p1.face.window`، دون التحقق من أن النافذة ليست ملء الشاشة (مثل `0,0,1280,720`) ودون تحديد مقياس الصورة `p1.face.scale`. | إضافة التحقق الصارم `isWindowSafe`، وقراءة مسار ملف القتال الفعلي من `system.def`، وتطبيق مقياس الوجه الآمن `1, 1`. |
 
@@ -79,15 +78,15 @@ In **Phase 4.3.2**, we conducted an exhaustive runtime audit and root-cause repa
 ### 3. تشخيص وإصلاح Google Gemini AI (Diagnostics & Repair)
 
 #### A. تصحيح النموذج والاتصال
-- **النموذج المعتمد**: `gemini-2.5-flash`
-- **النموذج البديل (Fallback)**: `gemini-1.5-flash`
-- **عنوان الطلب**: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}`
+- **النموذج المعتمد**: `gemini-3.8-flash`
+- **النموذج البديل (Fallback)**: `gemini-flash-latest`
+- **عنوان الطلب**: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` (مع التوثيق عبر ترويسة `x-goog-api-key`)
 
 #### B. خريطة الأخطاء التفصيلية باللغة العربية
 تم دعم تصنيف دقيق لجميع سيناريوهات الاستجابة والشبكة مع قياس زمن الاستجابة بالميلي ثانية (`roundTripMs`):
 - **HTTP 400**: خطأ في صياغة الطلب أو المفتاح غير مكتمل.
 - **HTTP 401 / 403**: مفتاح Gemini غير صالح أو غير مصرح له بالوصول للنموذج.
-- **HTTP 404**: النموذج المطلوب غير موجود لدى Google، مع تفعيل الانتقال التلقائي إلى `gemini-1.5-flash`.
+- **HTTP 404**: النموذج المطلوب غير متاح، مع تفعيل الانتقال التلقائي إلى `gemini-flash-latest`.
 - **HTTP 429**: تم تجاوز حصة الاستخدام أو حد الطلبات لحساب المستخدم لدى Google (Quota Exceeded).
 - **HTTP 500 / 503**: خوادم Google Gemini تواجه ضغطاً أو صيانة مؤقتة.
 - **انقطاع الشبكة / المهلة**: رسائل واضحة حول فحص الاتصال بالإنترنت مع مهلة قصوى (30 ثانية).

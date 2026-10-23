@@ -67,8 +67,8 @@ data class GeminiCharacterProposal(
 object GeminiApiClient {
 
     private const val TAG = "GeminiApiClient"
-    const val DEFAULT_MODEL = "gemini-2.5-flash"
-    const val FALLBACK_MODEL = "gemini-1.5-flash"
+    const val DEFAULT_MODEL = "gemini-3.8-flash"
+    const val FALLBACK_MODEL = "gemini-flash-latest"
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -116,7 +116,7 @@ object GeminiApiClient {
 
     /**
      * Tests the validity of the user's personal API key and its ability to communicate
-     * with the `gemini-2.5-flash` model (falling back to `gemini-1.5-flash` if 404).
+     * with the `gemini-3.8-flash` model (falling back to `gemini-flash-latest` if 404).
      */
     suspend fun testConnection(apiKey: String): GeminiResult<String> = withContext(Dispatchers.IO) {
         val trimmedKey = apiKey.trim()

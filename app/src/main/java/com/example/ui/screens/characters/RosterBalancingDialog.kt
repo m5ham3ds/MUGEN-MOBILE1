@@ -104,7 +104,7 @@ fun RosterBalancingDialog(
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = if (isAiPowered) "تحليل ذكي شامل مدعوم بـ Google Gemini (gemini-2.5-flash)" else "تحليل رياضي ومحلي للأبعاد والقتال",
+                                text = if (isAiPowered) "تحليل ذكي شامل مدعوم بـ Google Gemini (Gemini 3.8 Flash)" else "تحليل رياضي ومحلي للأبعاد والقتال",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isAiPowered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
